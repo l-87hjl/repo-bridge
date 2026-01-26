@@ -52,12 +52,37 @@ app.post('/github/dryrun', (req, res) => {
   }
 });
 
-app.post('/apply', (req, res) => {
-  res.status(501).json({
-    ok: false,
-    error: 'NotImplemented',
-    message: 'POST /apply is a placeholder.'
-  });
+app.post('/apply', async (req, res) => {
+  try {
+    const {
+      owner,
+      repo,
+      branch,        // e.g. "claude/horror-story-generator-DTAVx" or "main"
+      path,          // e.g. "README.md"
+      content,       // raw text
+      message        // commit message
+    } = req.body || {};
+
+    if (!owner || !repo || !branch || !path || typeof content !== 'string' || !message) {
+      return res.status(400).json({
+        ok: false,
+        error: "BadRequest",
+        message: "Required: owner, repo, branch, path, content(string), message"
+      });
+    }
+
+    const { applyOneFile } = require('./github');
+    const result = await applyOneFile({ owner, repo, branch, path, content, message });
+
+    return res.json({ ok: true, ...result });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({
+      ok: false,
+      error: "ApplyFailed",
+      message: e?.message || String(e)
+    });
+  }
 });
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
