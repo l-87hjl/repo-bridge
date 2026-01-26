@@ -2,6 +2,7 @@
 
 const express = require('express');
 const helmet = require('helmet');
+const { getInstallationOctokit } = require('./github');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -16,6 +17,39 @@ app.get('/', (req, res) => {
 
 app.get('/health', (req, res) => {
   res.json({ ok: true, service: 'repo-bridge', time: new Date().toISOString() });
+});
+function parseRepo(full) {
+  const [owner, repo] = String(full || '').split('/');
+  if (!owner || !repo) throw new Error('repo must be "owner/name"');
+  return { owner, repo };
+}
+
+app.post('/github/dryrun', (req, res) => {
+  try {
+    const { repo, title, head, base, files } = req.body || {};
+    parseRepo(repo);
+    if (!title || !head || !base) throw new Error('title, head, base required');
+    if (!Array.isArray(files) || files.length < 1) throw new Error('files must be a non-empty array');
+
+    for (const f of files) {
+      if (!f.path || typeof f.content !== 'string') {
+        throw new Error('each file must have path + content');
+      }
+    }
+
+    res.json({
+      ok: true,
+      wouldDo: {
+        repo,
+        base,
+        head,
+        title,
+        filesChanged: files.length
+      }
+    });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: e.message });
+  }
 });
 
 app.post('/apply', (req, res) => {
