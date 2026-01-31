@@ -95,8 +95,13 @@ async function applyOneFile({ owner, repo, branch, path, content, message, insta
 
 /**
  * Dry-run helper: returns what would be applied, but does NOT touch GitHub.
+ *
+ * IMPORTANT: This function is intentionally pure/synchronous and makes NO API calls.
+ * It only computes and returns metadata about what would happen.
+ * This guarantees that dry-run mode can never accidentally commit anything.
  */
 function dryRunOneFile({ owner, repo, branch, path, content, message }) {
+  // No API calls here - purely local computation
   return {
     ok: true,
     wouldApply: { owner, repo, branch, path, bytes: Buffer.byteLength(content || '', 'utf8'), message },

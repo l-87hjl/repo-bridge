@@ -6,7 +6,10 @@ A minimal Node.js/Express microservice that bridges AI services (like ChatGPT) t
 
 - Create or update files in GitHub repositories via REST API
 - GitHub App authentication (no personal access tokens needed)
-- Dry-run mode for previewing changes without committing
+- Dry-run mode for previewing changes without committing (guaranteed safe - no API calls)
+- Default branch targeting (`main` by default)
+- API authentication via Bearer token
+- Repository and path allowlists for access control
 - Support for multiple request formats
 - Security headers via Helmet
 - Designed for deployment on Render
@@ -39,10 +42,21 @@ cp .env.example .env
 Edit `.env` with your values:
 
 ```env
+# Required
 GITHUB_APP_ID=123456
 GITHUB_PRIVATE_KEY="-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----"
-GITHUB_INSTALLATION_ID=12345678  # Optional: can be passed per-request
-PORT=3000                         # Optional: defaults to 3000
+
+# Optional GitHub config
+GITHUB_INSTALLATION_ID=12345678  # Can be passed per-request instead
+DEFAULT_BRANCH=main              # Defaults to 'main'
+
+# Optional security (recommended for production)
+API_AUTH_TOKEN=your-secret-token  # Require Bearer token auth
+ALLOWED_REPOS=myorg/*,user/repo   # Restrict to specific repos
+ALLOWED_PATHS=src/*,docs/*        # Restrict to specific paths
+
+# Optional server config
+PORT=3000                         # Defaults to 3000
 ```
 
 ### 3. Start the Server
@@ -69,17 +83,30 @@ See [docs/API.md](docs/API.md) for detailed API documentation.
 ### Create or Update a File
 
 ```bash
+# Without auth (if API_AUTH_TOKEN is not set)
 curl -X POST http://localhost:3000/apply \
   -H "Content-Type: application/json" \
   -d '{
     "owner": "your-username",
     "repo": "your-repo",
-    "branch": "main",
+    "path": "test.txt",
+    "content": "Hello, World!",
+    "message": "Add test file"
+  }'
+
+# With auth (if API_AUTH_TOKEN is set)
+curl -X POST http://localhost:3000/apply \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "repo": "your-username/your-repo",
     "path": "test.txt",
     "content": "Hello, World!",
     "message": "Add test file"
   }'
 ```
+
+Note: `branch` defaults to `main` if not specified.
 
 ### Preview Changes (Dry Run)
 
@@ -89,13 +116,14 @@ curl -X POST http://localhost:3000/apply \
   -d '{
     "owner": "your-username",
     "repo": "your-repo",
-    "branch": "main",
     "path": "test.txt",
     "content": "Hello, World!",
     "message": "Add test file",
     "dryRun": true
   }'
 ```
+
+Dry-run mode is guaranteed safe - it makes no GitHub API calls and only returns what would be applied.
 
 ## Project Structure
 
@@ -121,11 +149,26 @@ repo-bridge/
    - **Build Command**: `npm install`
    - **Start Command**: `npm start`
 4. Add environment variables:
-   - `GITHUB_APP_ID`
-   - `GITHUB_PRIVATE_KEY` (paste the entire PEM key; literal `\n` is handled)
+   - `GITHUB_APP_ID` (required)
+   - `GITHUB_PRIVATE_KEY` (required - paste the entire PEM key; literal `\n` is handled)
    - `GITHUB_INSTALLATION_ID` (optional)
+   - `API_AUTH_TOKEN` (recommended for production)
+   - `ALLOWED_REPOS` (recommended - restrict which repos can be modified)
+   - `ALLOWED_PATHS` (optional - restrict which paths can be modified)
 
 ## Troubleshooting
+
+### "Missing or invalid Authorization header"
+If `API_AUTH_TOKEN` is set, you must include the header:
+```
+Authorization: Bearer <your-token>
+```
+
+### "Repository X is not in the allowlist"
+The repository is not in `ALLOWED_REPOS`. Either add it to the allowlist or remove the restriction.
+
+### "Path X is not in the allowlist"
+The file path is not in `ALLOWED_PATHS`. Either add it to the allowlist or remove the restriction.
 
 ### "Missing required env var: GITHUB_APP_ID"
 Ensure you have set the `GITHUB_APP_ID` environment variable.
