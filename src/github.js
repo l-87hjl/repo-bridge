@@ -54,7 +54,7 @@ async function getExistingFileSha(octokit, { owner, repo, path, branch }) {
     return null;
   } catch (e) {
     // 404 means file doesn't exist yet (that's OK)
-    if (e && (e.status === 404 || e.status === 403)) return null;
+    if (e && e.status === 404) return null;
     throw e;
   }
 }
