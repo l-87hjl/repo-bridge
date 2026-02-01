@@ -4,7 +4,8 @@ A minimal Node.js/Express microservice that bridges AI services (like ChatGPT) t
 
 ## Features
 
-- Create or update files in GitHub repositories via REST API
+- **Read** files from GitHub repositories
+- **Create or update** files in GitHub repositories via REST API
 - GitHub App authentication (no personal access tokens needed)
 - Dry-run mode for previewing changes without committing (guaranteed safe - no API calls)
 - Default branch targeting (`main` by default)
@@ -73,12 +74,39 @@ The server will start on `http://localhost:3000`.
 |--------|----------|-------------|
 | GET | `/` | Service info and available endpoints |
 | GET | `/health` | Health check with timestamp |
+| POST | `/read` | Read a file from GitHub |
 | POST | `/apply` | Create or update a file in GitHub |
 | POST | `/github/dryrun` | Preview changes without committing |
 
 See [docs/API.md](docs/API.md) for detailed API documentation.
 
 ## Basic Usage
+
+### Read a File
+
+```bash
+curl -X POST http://localhost:3000/read \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "repo": "your-username/your-repo",
+    "path": "src/index.js"
+  }'
+```
+
+Response:
+```json
+{
+  "ok": true,
+  "owner": "your-username",
+  "repo": "your-repo",
+  "branch": "main",
+  "path": "src/index.js",
+  "sha": "abc123...",
+  "size": 1234,
+  "content": "// file contents here..."
+}
+```
 
 ### Create or Update a File
 

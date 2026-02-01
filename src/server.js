@@ -21,7 +21,7 @@ const ALLOWED_PATHS = process.env.ALLOWED_PATHS
   : null; // null means allow all
 
 app.get('/', (req, res) => {
-  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/github/dryrun'] });
+  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/github/dryrun'] });
 });
 
 app.get('/health', (req, res) => {
@@ -198,6 +198,51 @@ app.post('/apply', requireAuth, async (req, res) => {
   } catch (e) {
     console.error(e);
     return res.status(500).json({ ok: false, error: 'ApplyFailed', message: e?.message || String(e) });
+  }
+});
+
+app.post('/read', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+
+    // Allow repo like "owner/name" too
+    let owner = b.owner;
+    let repo = b.repo;
+    if (!owner && typeof repo === 'string' && repo.includes('/')) {
+      const [o, r] = repo.split('/');
+      owner = o;
+      repo = r;
+    }
+
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !path) {
+      return badRequest(res, 'Required: owner, repo, path. Optional: branch (defaults to main)');
+    }
+
+    // Check allowlists
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+
+    const { readOneFile } = require('./github');
+    const result = await readOneFile({ owner, repo, branch, path, installationId });
+    return res.json(result);
+  } catch (e) {
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found' });
+    }
+    if (status === 400) {
+      return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e) });
+    }
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'ReadFailed', message: e?.message || String(e) });
   }
 });
 

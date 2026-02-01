@@ -235,6 +235,71 @@ When `dryRun: true`:
 
 ---
 
+### POST /read
+
+Read a file from a GitHub repository.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repository-name",
+  "path": "path/to/file.txt",
+  "branch": "main"
+}
+```
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `owner` | string | Yes* | Repository owner (username or org) |
+| `repo` | string | Yes | Repository name (or `owner/repo` format) |
+| `path` | string | Yes | File path within the repository |
+| `branch` | string | No | Target branch name (defaults to `main`) |
+| `installationId` | number | No | GitHub App installation ID (overrides env) |
+
+*`owner` is optional if `repo` is in `owner/repo` format.
+
+**Success Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "username",
+  "repo": "repository-name",
+  "branch": "main",
+  "path": "path/to/file.txt",
+  "sha": "abc123def456...",
+  "size": 1234,
+  "content": "file contents here..."
+}
+```
+
+**Error Responses**
+
+*404 Not Found* - File does not exist:
+
+```json
+{
+  "ok": false,
+  "error": "NotFound",
+  "message": "File not found"
+}
+```
+
+*400 Bad Request* - Path is a directory:
+
+```json
+{
+  "ok": false,
+  "error": "BadRequest",
+  "message": "Path is a directory, not a file"
+}
+```
+
+---
+
 ### POST /github/dryrun
 
 Preview what would be applied without making any changes. This endpoint does not call the GitHub API.
@@ -268,9 +333,10 @@ Same as `/apply` (both formats supported).
 | 400 | BadRequest | Missing or invalid required parameters |
 | 401 | Unauthorized | Missing or invalid auth token |
 | 403 | Forbidden | Repository or path not in allowlist |
-| 404 | NotFound | Unknown endpoint |
+| 404 | NotFound | Unknown endpoint or file not found |
 | 500 | ServerError | Internal server error |
-| 500 | ApplyFailed | GitHub API call failed |
+| 500 | ApplyFailed | GitHub API call failed (write) |
+| 500 | ReadFailed | GitHub API call failed (read) |
 
 ---
 

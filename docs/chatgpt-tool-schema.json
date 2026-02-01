@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge API",
-    "description": "Bridge AI services to GitHub operations. Create or update files in repositories via REST API.",
-    "version": "0.1.0"
+    "description": "Bridge AI services to GitHub operations. Read, create, or update files in repositories via REST API.",
+    "version": "0.2.0"
   },
   "servers": [
     {
@@ -86,6 +86,50 @@
         ]
       }
     },
+    "/read": {
+      "post": {
+        "operationId": "readFile",
+        "summary": "Read a file from a GitHub repository",
+        "description": "Reads and returns the contents of a file from the specified repository. Use this to read existing code before making modifications.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/github/dryrun": {
       "post": {
         "operationId": "dryRunFileChange",
@@ -142,6 +186,64 @@
   },
   "components": {
     "schemas": {
+      "ReadRequest": {
+        "type": "object",
+        "required": ["repo", "path"],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/name' format",
+            "example": "myorg/myrepo"
+          },
+          "path": {
+            "type": "string",
+            "description": "File path within the repository",
+            "example": "src/index.js"
+          },
+          "branch": {
+            "type": "string",
+            "description": "Target branch (defaults to 'main')",
+            "default": "main"
+          }
+        }
+      },
+      "ReadResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "owner": {
+            "type": "string",
+            "example": "myorg"
+          },
+          "repo": {
+            "type": "string",
+            "example": "myrepo"
+          },
+          "branch": {
+            "type": "string",
+            "example": "main"
+          },
+          "path": {
+            "type": "string",
+            "example": "src/index.js"
+          },
+          "sha": {
+            "type": "string",
+            "description": "SHA of the file"
+          },
+          "size": {
+            "type": "integer",
+            "description": "Size of file in bytes"
+          },
+          "content": {
+            "type": "string",
+            "description": "File contents (decoded UTF-8)"
+          }
+        }
+      },
       "ApplyRequest": {
         "type": "object",
         "required": ["repo", "path", "content", "message"],
@@ -281,7 +383,7 @@
           },
           "error": {
             "type": "string",
-            "enum": ["BadRequest", "Unauthorized", "Forbidden", "ServerError", "ApplyFailed"]
+            "enum": ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "ServerError", "ApplyFailed", "ReadFailed"]
           },
           "message": {
             "type": "string"

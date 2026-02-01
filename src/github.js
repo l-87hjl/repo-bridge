@@ -108,8 +108,53 @@ function dryRunOneFile({ owner, repo, branch, path, content, message }) {
   };
 }
 
+/**
+ * Read exactly one file from a repo/branch.
+ * Returns decoded UTF-8 content.
+ * Params: owner, repo, branch, path, installationId (optional)
+ */
+async function readOneFile({ owner, repo, branch, path, installationId }) {
+  const octokit = await getInstallationOctokit({ installationId });
+
+  const r = await octokit.rest.repos.getContent({
+    owner,
+    repo,
+    path,
+    ref: branch,
+  });
+
+  if (!r || !r.data) throw new Error('Empty response from GitHub');
+  if (Array.isArray(r.data)) {
+    const err = new Error('Path is a directory, not a file');
+    err.status = 400;
+    throw err;
+  }
+
+  const encoding = r.data.encoding || 'base64';
+  const raw = r.data.content || '';
+  let content = raw;
+
+  if (encoding === 'base64') {
+    // GitHub may include line breaks in base64 payload
+    const cleaned = raw.replace(/\n/g, '');
+    content = Buffer.from(cleaned, 'base64').toString('utf8');
+  }
+
+  return {
+    ok: true,
+    owner,
+    repo,
+    branch,
+    path,
+    sha: r.data.sha || null,
+    size: typeof r.data.size === 'number' ? r.data.size : null,
+    content,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
   dryRunOneFile,
+  readOneFile,
 };
