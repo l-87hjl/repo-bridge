@@ -20,6 +20,13 @@ const ALLOWED_PATHS = process.env.ALLOWED_PATHS
   ? process.env.ALLOWED_PATHS.split(',').map(s => s.trim()).filter(Boolean)
   : null; // null means allow all
 
+// Parse read-only repos from environment (comma-separated owner/repo)
+// These repos can be read but not written to via /apply
+const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
+  .split(',')
+  .map(s => s.trim().toLowerCase())
+  .filter(Boolean);
+
 app.get('/', (req, res) => {
   res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/github/dryrun'] });
 });
@@ -94,6 +101,16 @@ function isPathAllowed(filePath) {
     // Exact match or prefix match (for directories)
     return filePath === pattern || filePath.startsWith(pattern.endsWith('/') ? pattern : pattern + '/');
   });
+}
+
+/**
+ * Check if a repo is configured as read-only.
+ * Returns true if the repo is read-only (writes blocked), false otherwise.
+ */
+function isRepoReadOnly(owner, repo) {
+  if (READ_ONLY_REPOS.length === 0) return false;
+  const fullName = `${owner}/${repo}`.toLowerCase();
+  return READ_ONLY_REPOS.includes(fullName);
 }
 
 function normalizeApplyBody(body) {
@@ -184,6 +201,15 @@ app.post('/apply', requireAuth, async (req, res) => {
     }
     if (!isPathAllowed(path)) {
       return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+
+    // Check if repo is read-only (blocks writes via /apply)
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'RepoReadOnly',
+        message: `Repository ${owner}/${repo} is configured as read-only`
+      });
     }
 
     if (dryRun) {
