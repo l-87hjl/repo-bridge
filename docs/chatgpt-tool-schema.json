@@ -1,0 +1,300 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "repo-bridge API",
+    "description": "Bridge AI services to GitHub operations. Create or update files in repositories via REST API.",
+    "version": "0.1.0"
+  },
+  "servers": [
+    {
+      "url": "https://your-app.onrender.com",
+      "description": "Production server (update with your Render URL)"
+    }
+  ],
+  "paths": {
+    "/apply": {
+      "post": {
+        "operationId": "applyFileChange",
+        "summary": "Create or update a file in a GitHub repository",
+        "description": "Creates a new file or updates an existing file in the specified repository. Always use dryRun: true first to preview changes before committing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApplyResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request - Missing required fields",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized - Invalid or missing auth token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - Repository or path not in allowlist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Server Error - GitHub API or internal error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/github/dryrun": {
+      "post": {
+        "operationId": "dryRunFileChange",
+        "summary": "Preview a file change without committing",
+        "description": "Returns what would be applied without making any changes. Makes NO GitHub API calls. Use this to verify changes before calling /apply.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApplyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dry run result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DryRunResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Check if the service is running",
+        "description": "Returns health status and timestamp. No authentication required.",
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "ApplyRequest": {
+        "type": "object",
+        "required": ["repo", "path", "content", "message"],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/name' format",
+            "example": "myorg/myrepo"
+          },
+          "path": {
+            "type": "string",
+            "description": "File path within the repository",
+            "example": "src/index.js"
+          },
+          "content": {
+            "type": "string",
+            "description": "File content to write"
+          },
+          "message": {
+            "type": "string",
+            "description": "Commit message",
+            "example": "Add new feature"
+          },
+          "branch": {
+            "type": "string",
+            "description": "Target branch (defaults to 'main')",
+            "default": "main"
+          },
+          "dryRun": {
+            "type": "boolean",
+            "description": "If true, preview only without committing",
+            "default": false
+          }
+        }
+      },
+      "ApplyResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "committed": {
+            "type": "boolean",
+            "example": true
+          },
+          "owner": {
+            "type": "string",
+            "example": "myorg"
+          },
+          "repo": {
+            "type": "string",
+            "example": "myrepo"
+          },
+          "branch": {
+            "type": "string",
+            "example": "main"
+          },
+          "path": {
+            "type": "string",
+            "example": "src/index.js"
+          },
+          "created": {
+            "type": "boolean",
+            "description": "True if file was newly created"
+          },
+          "updated": {
+            "type": "boolean",
+            "description": "True if file was updated (existed before)"
+          },
+          "commitSha": {
+            "type": "string",
+            "description": "SHA of the commit"
+          },
+          "contentSha": {
+            "type": "string",
+            "description": "SHA of the file content"
+          }
+        }
+      },
+      "DryRunResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "wouldApply": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string"
+              },
+              "repo": {
+                "type": "string"
+              },
+              "branch": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "description": "Size of content in bytes"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "HealthResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "service": {
+            "type": "string",
+            "example": "repo-bridge"
+          },
+          "time": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": false
+          },
+          "error": {
+            "type": "string",
+            "enum": ["BadRequest", "Unauthorized", "Forbidden", "ServerError", "ApplyFailed"]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API authentication token (set via API_AUTH_TOKEN env var on server)"
+      }
+    }
+  }
+}

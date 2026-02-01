@@ -130,16 +130,29 @@ Dry-run mode is guaranteed safe - it makes no GitHub API calls and only returns 
 ```
 repo-bridge/
 ├── src/
-│   ├── server.js      # Express server and API routes
-│   └── github.js      # GitHub API integration
+│   ├── server.js              # Express server and API routes
+│   └── github.js              # GitHub API integration
 ├── docs/
-│   └── API.md         # API documentation
-├── archive/           # Archived old code versions
-├── .env.example       # Example environment configuration
+│   ├── API.md                 # API documentation
+│   ├── README_AI.md           # Instructions for AI agents
+│   ├── CHANGELOG_AI.md        # AI change log (append-only)
+│   ├── STATE.md               # Repository state summary
+│   └── chatgpt-tool-schema.json  # OpenAPI schema for ChatGPT
+├── archive/                   # Archived old code versions
+├── .env.example               # Example environment configuration
 ├── .gitignore
 ├── package.json
 └── README.md
 ```
+
+## AI Integration
+
+For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
+
+1. **Read** [docs/README_AI.md](docs/README_AI.md) for operational instructions
+2. **Import** [docs/chatgpt-tool-schema.json](docs/chatgpt-tool-schema.json) as a custom tool/action
+3. **Update** [docs/CHANGELOG_AI.md](docs/CHANGELOG_AI.md) after each commit
+4. **Maintain** [docs/STATE.md](docs/STATE.md) when repo structure changes
 
 ## Deployment on Render
 
