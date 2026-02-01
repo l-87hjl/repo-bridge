@@ -10,6 +10,38 @@ For production deployments, replace with your deployed URL.
 
 ---
 
+## Authentication
+
+If `API_AUTH_TOKEN` is set in the environment, all `/apply` and `/github/dryrun` requests must include an Authorization header:
+
+```
+Authorization: Bearer <your-token>
+```
+
+If `API_AUTH_TOKEN` is not set, requests are allowed without authentication.
+
+---
+
+## Access Control
+
+### Repository Allowlist
+
+If `ALLOWED_REPOS` is set, only the specified repositories can be modified. Format: comma-separated list, supports wildcards.
+
+```env
+ALLOWED_REPOS=myorg/*,otheruser/specific-repo
+```
+
+### Path Allowlist
+
+If `ALLOWED_PATHS` is set, only the specified paths can be modified. Format: comma-separated list, supports wildcards and prefix matching.
+
+```env
+ALLOWED_PATHS=src/*,docs/*,config/
+```
+
+---
+
 ## Endpoints
 
 ### GET /
@@ -106,7 +138,7 @@ You can also specify the repo as `"owner/repo"`:
 |-----------|------|----------|-------------|
 | `owner` | string | Yes* | Repository owner (username or org) |
 | `repo` | string | Yes | Repository name (or `owner/repo` format) |
-| `branch` | string | Yes | Target branch name |
+| `branch` | string | No | Target branch name (defaults to `main`) |
 | `path` | string | Yes | File path within the repository |
 | `content` | string | Yes | File content to write |
 | `message` | string | Yes | Commit message |
@@ -167,7 +199,27 @@ When `dryRun: true`:
 {
   "ok": false,
   "error": "BadRequest",
-  "message": "Required: owner, repo, branch, path, content(string), message"
+  "message": "Required: owner, repo, path, content(string), message. Optional: branch (defaults to main)"
+}
+```
+
+*401 Unauthorized* - Missing or invalid auth token:
+
+```json
+{
+  "ok": false,
+  "error": "Unauthorized",
+  "message": "Missing or invalid Authorization header. Use: Bearer <token>"
+}
+```
+
+*403 Forbidden* - Repository or path not in allowlist:
+
+```json
+{
+  "ok": false,
+  "error": "Forbidden",
+  "message": "Repository myorg/myrepo is not in the allowlist"
 }
 ```
 
@@ -214,6 +266,8 @@ Same as `/apply` (both formats supported).
 | HTTP Code | Error Type | Description |
 |-----------|------------|-------------|
 | 400 | BadRequest | Missing or invalid required parameters |
+| 401 | Unauthorized | Missing or invalid auth token |
+| 403 | Forbidden | Repository or path not in allowlist |
 | 404 | NotFound | Unknown endpoint |
 | 500 | ServerError | Internal server error |
 | 500 | ApplyFailed | GitHub API call failed |
@@ -224,31 +278,44 @@ Same as `/apply` (both formats supported).
 
 ### Using curl
 
-**Create a new file:**
+**Create a new file (without auth):**
 
 ```bash
 curl -X POST http://localhost:3000/apply \
   -H "Content-Type: application/json" \
   -d '{
     "repo": "myuser/myrepo",
-    "branch": "main",
     "path": "hello.txt",
     "content": "Hello, World!",
     "message": "Add hello.txt"
   }'
 ```
 
-**Update an existing file:**
+**Create a new file (with auth):**
+
+```bash
+curl -X POST http://localhost:3000/apply \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-secret-token" \
+  -d '{
+    "repo": "myuser/myrepo",
+    "path": "hello.txt",
+    "content": "Hello, World!",
+    "message": "Add hello.txt"
+  }'
+```
+
+**Create on a specific branch:**
 
 ```bash
 curl -X POST http://localhost:3000/apply \
   -H "Content-Type: application/json" \
   -d '{
     "repo": "myuser/myrepo",
-    "branch": "main",
+    "branch": "develop",
     "path": "hello.txt",
-    "content": "Hello, Updated World!",
-    "message": "Update hello.txt"
+    "content": "Hello, World!",
+    "message": "Add hello.txt"
   }'
 ```
 
@@ -259,7 +326,6 @@ curl -X POST http://localhost:3000/github/dryrun \
   -H "Content-Type: application/json" \
   -d '{
     "repo": "myuser/myrepo",
-    "branch": "main",
     "path": "hello.txt",
     "content": "Hello, World!",
     "message": "Add hello.txt"
@@ -273,14 +339,14 @@ const response = await fetch('http://localhost:3000/apply', {
   method: 'POST',
   headers: {
     'Content-Type': 'application/json',
+    'Authorization': 'Bearer your-secret-token', // if API_AUTH_TOKEN is set
   },
   body: JSON.stringify({
-    owner: 'myuser',
-    repo: 'myrepo',
-    branch: 'main',
+    repo: 'myuser/myrepo',
     path: 'hello.txt',
     content: 'Hello, World!',
     message: 'Add hello.txt',
+    // branch defaults to 'main' if not specified
   }),
 });
 
@@ -295,13 +361,15 @@ import requests
 
 response = requests.post(
     'http://localhost:3000/apply',
+    headers={
+        'Authorization': 'Bearer your-secret-token',  # if API_AUTH_TOKEN is set
+    },
     json={
-        'owner': 'myuser',
-        'repo': 'myrepo',
-        'branch': 'main',
+        'repo': 'myuser/myrepo',
         'path': 'hello.txt',
         'content': 'Hello, World!',
         'message': 'Add hello.txt',
+        # branch defaults to 'main' if not specified
     }
 )
 
@@ -322,12 +390,17 @@ The service does not implement its own rate limiting.
 
 ## Security Considerations
 
-1. **Authentication**: The service uses GitHub App authentication, which is more secure than personal access tokens
-2. **Helmet**: Security headers are automatically added via Helmet middleware
-3. **No secrets in requests**: Authentication is handled server-side via environment variables
-4. **Payload limit**: Request body is limited to 512KB
+1. **API Authentication**: Set `API_AUTH_TOKEN` to require Bearer token authentication on all write endpoints
+2. **Repository Allowlist**: Set `ALLOWED_REPOS` to restrict which repositories can be modified
+3. **Path Allowlist**: Set `ALLOWED_PATHS` to restrict which file paths can be modified
+4. **GitHub App Authentication**: The service uses GitHub App authentication, which is more secure than personal access tokens
+5. **Helmet**: Security headers are automatically added via Helmet middleware
+6. **No secrets in requests**: GitHub authentication is handled server-side via environment variables
+7. **Payload limit**: Request body is limited to 512KB
+8. **Dry-run safety**: The dry-run endpoint makes no GitHub API calls, guaranteeing it can never accidentally commit
 
-For production use, consider:
-- Adding authentication to the API endpoints
-- Implementing request rate limiting
-- Using HTTPS (handled by Render or your reverse proxy)
+For production use:
+- **Required**: Set `API_AUTH_TOKEN` to prevent unauthorized access
+- **Recommended**: Set `ALLOWED_REPOS` to limit which repositories can be modified
+- **Recommended**: Use HTTPS (handled by Render or your reverse proxy)
+- **Optional**: Implement request rate limiting at your reverse proxy
