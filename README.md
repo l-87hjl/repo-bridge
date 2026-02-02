@@ -229,4 +229,10 @@ Your GitHub App doesn't have the required permissions. Ensure it has:
 
 ## License
 
-ISC
+This project is licensed under the **Business Source License 1.1 (BSL 1.1)**.
+
+- Non-commercial use, evaluation, research, and internal review are permitted.
+- Commercial use requires a separate license prior to the Change Date.
+- On **January 1, 2030**, this project will automatically convert to the **Apache License 2.0**.
+
+See the [LICENSE](./LICENSE) file for full terms.
