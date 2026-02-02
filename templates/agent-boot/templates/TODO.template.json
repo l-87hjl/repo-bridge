@@ -1,0 +1,23 @@
+{
+  "version": "1.0",
+  "lastUpdated": "{{TIMESTAMP}}",
+  "tasks": [
+    {
+      "id": "T001",
+      "title": "Verify workspace setup",
+      "description": "Confirm all required files and directories exist",
+      "status": "pending",
+      "priority": "high",
+      "created": "{{TIMESTAMP}}",
+      "updated": "{{TIMESTAMP}}",
+      "dependencies": [],
+      "notes": "Initial task - run on first session"
+    }
+  ],
+  "completed": [],
+  "metadata": {
+    "nextId": 2,
+    "totalCreated": 1,
+    "totalCompleted": 0
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "version": "1.0",
+  "lastUpdated": "{{TIMESTAMP}}",
+  "lastCommitSha": null,
+  "session": {
+    "id": "{{SESSION_ID}}",
+    "started": "{{TIMESTAMP}}",
+    "ended": null
+  },
+  "currentPhase": "initialized",
+  "currentTask": null,
+  "context": {
+    "workspaceName": "{{WORKSPACE_NAME}}",
+    "summary": "Initial state - no work performed yet"
+  },
+  "history": {
+    "lastAction": null,
+    "lastError": null,
+    "lastSuccess": null
+  },
+  "errors": [],
+  "metadata": {
+    "totalSessions": 0,
+    "lastSuccessfulSession": null,
+    "createdAt": "{{TIMESTAMP}}",
+    "bootRepo": "{{OWNER}}/agent-boot",
+    "contractRepo": "{{OWNER}}/ai-agent-contract"
+  }
+}
