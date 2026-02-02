@@ -226,7 +226,7 @@ Either set `GITHUB_INSTALLATION_ID` in your environment or include `installation
 1. Verify your `GITHUB_APP_ID` is correct
 2. Check that your private key is properly formatted
 3. Ensure the GitHub App is installed on the target repository
-4. Verify the installation ID is correct
+5. Verify the installation ID is correct
 
 ### "Resource not accessible by integration"
 Your GitHub App doesn't have the required permissions. Ensure it has:
@@ -234,4 +234,10 @@ Your GitHub App doesn't have the required permissions. Ensure it has:
 
 ## License
 
-ISC
+This project is licensed under the **Business Source License 1.1 (BSL 1.1)**.
+
+- Non-commercial use, evaluation, research, and internal review are permitted.
+- Commercial use requires a separate license prior to the Change Date.
+- On **January 1, 2030**, this project will automatically convert to the **Apache License 2.0**.
+
+See the [LICENSE](./LICENSE) file for full terms.
