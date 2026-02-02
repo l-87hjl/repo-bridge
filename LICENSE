@@ -1,0 +1,79 @@
+Business Source License 1.1
+
+License text copyright (c) 2026 the Licensor.
+"Business Source License" is a trademark of MariaDB Corporation Ab.
+
+-------------------------------------------------------------------------------
+
+Parameters
+
+Licensor: Geoffrey Aguirre
+
+Licensed Work: Repo-Bridge
+
+The Licensed Work is copyright (c) 2026 Geoffrey Geoffrey.
+
+Change Date: January 1, 2030
+
+Change License: Apache License, Version 2.0
+
+Additional Use Grant:
+The Licensor hereby grants you the right to use, copy, modify, and create
+derivative works of the Licensed Work for the following purposes only:
+
+- Evaluation
+- Research
+- Internal testing
+- Security review
+- Educational use
+- Non-commercial use
+
+Commercial use of the Licensed Work, including but not limited to offering
+the Licensed Work as part of a paid service, embedding it within a commercial
+product, or providing it as managed infrastructure, is not permitted prior
+to the Change Date without a separate commercial license from the Licensor.
+
+-------------------------------------------------------------------------------
+
+Terms
+
+The Licensor hereby grants you a non-exclusive, worldwide, royalty-free
+license to use, copy, modify, and create derivative works of the Licensed Work,
+subject to the terms and conditions of this License.
+
+You may not use the Licensed Work for commercial purposes prior to the Change
+Date, except as explicitly permitted by the Additional Use Grant or with
+written permission from the Licensor.
+
+You may distribute copies of the Licensed Work, provided that you include a
+copy of this License in all such distributions.
+
+Any use of the Licensed Work in violation of this License automatically
+terminates your rights under this License.
+
+-------------------------------------------------------------------------------
+
+Change License
+
+On the Change Date, the Licensed Work shall automatically be made available
+under the Change License stated above.
+
+As of the Change Date, the terms and conditions of this License shall no longer
+apply, and the Licensed Work shall be governed solely by the Change License.
+
+-------------------------------------------------------------------------------
+
+Disclaimer of Warranty
+
+The Licensed Work is provided "AS IS", without warranty of any kind, express
+or implied, including but not limited to warranties of merchantability,
+fitness for a particular purpose, and noninfringement.
+
+-------------------------------------------------------------------------------
+
+Limitation of Liability
+
+In no event shall the Licensor be liable for any claim, damages, or other
+liability, whether in an action of contract, tort, or otherwise, arising from,
+out of, or in connection with the Licensed Work or the use or other dealings
+in the Licensed Work.
