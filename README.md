@@ -55,6 +55,7 @@ DEFAULT_BRANCH=main              # Defaults to 'main'
 API_AUTH_TOKEN=your-secret-token  # Require Bearer token auth
 ALLOWED_REPOS=myorg/*,user/repo   # Restrict to specific repos
 ALLOWED_PATHS=src/*,docs/*        # Restrict to specific paths
+READ_ONLY_REPOS=myorg/config      # Allow read but block writes
 
 # Optional server config
 PORT=3000                         # Defaults to 3000
@@ -196,6 +197,7 @@ For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
    - `API_AUTH_TOKEN` (recommended for production)
    - `ALLOWED_REPOS` (recommended - restrict which repos can be modified)
    - `ALLOWED_PATHS` (optional - restrict which paths can be modified)
+   - `READ_ONLY_REPOS` (optional - allow read but block writes on specific repos)
 
 ## Troubleshooting
 
@@ -210,6 +212,9 @@ The repository is not in `ALLOWED_REPOS`. Either add it to the allowlist or remo
 
 ### "Path X is not in the allowlist"
 The file path is not in `ALLOWED_PATHS`. Either add it to the allowlist or remove the restriction.
+
+### "Repository X is configured as read-only"
+The repository is in `READ_ONLY_REPOS`. The `/read` endpoint works but `/apply` is blocked. Remove the repo from `READ_ONLY_REPOS` to enable writes.
 
 ### "Missing required env var: GITHUB_APP_ID"
 Ensure you have set the `GITHUB_APP_ID` environment variable.

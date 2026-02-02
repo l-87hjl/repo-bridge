@@ -40,6 +40,14 @@ If `ALLOWED_PATHS` is set, only the specified paths can be modified. Format: com
 ALLOWED_PATHS=src/*,docs/*,config/
 ```
 
+### Read-Only Repositories
+
+If `READ_ONLY_REPOS` is set, the specified repositories can be read via `/read` but writes via `/apply` are blocked. Use this when you need the GitHub App installed for read access but want to prevent modifications.
+
+```env
+READ_ONLY_REPOS=myorg/config-repo,myorg/reference-docs
+```
+
 ---
 
 ## Endpoints
@@ -54,7 +62,7 @@ Returns service information and available endpoints.
 {
   "service": "repo-bridge",
   "status": "running",
-  "endpoints": ["/health", "/apply", "/github/dryrun"]
+  "endpoints": ["/health", "/apply", "/read", "/github/dryrun"]
 }
 ```
 
@@ -223,6 +231,16 @@ When `dryRun: true`:
 }
 ```
 
+*403 RepoReadOnly* - Repository is configured as read-only:
+
+```json
+{
+  "ok": false,
+  "error": "RepoReadOnly",
+  "message": "Repository myorg/myrepo is configured as read-only"
+}
+```
+
 *500 Server Error* - GitHub API or authentication error:
 
 ```json
@@ -333,6 +351,7 @@ Same as `/apply` (both formats supported).
 | 400 | BadRequest | Missing or invalid required parameters |
 | 401 | Unauthorized | Missing or invalid auth token |
 | 403 | Forbidden | Repository or path not in allowlist |
+| 403 | RepoReadOnly | Repository is configured as read-only |
 | 404 | NotFound | Unknown endpoint or file not found |
 | 500 | ServerError | Internal server error |
 | 500 | ApplyFailed | GitHub API call failed (write) |
