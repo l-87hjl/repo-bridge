@@ -2,6 +2,8 @@
 
 A minimal Node.js/Express microservice that bridges AI services (like ChatGPT) to GitHub operations. It provides REST API endpoints to programmatically create or update files in GitHub repositories using GitHub App authentication.
 
+Repo-bridge is designed as a governed interface between AI agents and GitHub, emphasizing explicit authorization, scoped access, and reversible changes.
+
 ## Features
 
 - **Read** files from GitHub repositories
