@@ -23,6 +23,7 @@ Core behavioral rules that govern agent operation.
 - Always explain what you're about to do before doing it
 - Always confirm destructive actions before executing
 - Never assume the user wants something they didn't request
+- **When reading from multiple repos, explicitly state which repo each piece of information came from**
 
 ---
 
@@ -113,3 +114,24 @@ The work loop is: Read → Plan → Act → Verify → Persist
 - Never act without planning
 - Never persist without verifying
 - See `LOOP_PROTOCOL.md` for details
+
+---
+
+## Rule 11: Attribute Sources
+
+**Never conflate content from different repositories.**
+
+When working with multiple repositories:
+- Always state which repo you are reading: "Reading from `owner/repo`..."
+- When summarizing, clearly separate each repo's content
+- Format multi-repo comparisons as:
+  ```
+  ## From owner/repo-a:
+  [content from repo-a]
+
+  ## From owner/repo-b:
+  [content from repo-b]
+  ```
+- If you're uncertain which repo something came from, re-read and verify
+- Never assume content from one repo exists in another
+- Treat each repo as a completely separate context
