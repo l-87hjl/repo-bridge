@@ -152,9 +152,64 @@ async function readOneFile({ owner, repo, branch, path, installationId }) {
   };
 }
 
+/**
+ * List the file tree of a repo/branch.
+ * Returns an array of file paths.
+ * Params: owner, repo, branch, path (optional, defaults to root), installationId (optional)
+ */
+async function listTree({ owner, repo, branch, path, installationId }) {
+  const octokit = await getInstallationOctokit({ installationId });
+
+  const targetPath = path || '';
+
+  const r = await octokit.rest.repos.getContent({
+    owner,
+    repo,
+    path: targetPath,
+    ref: branch,
+  });
+
+  if (!r || !r.data) throw new Error('Empty response from GitHub');
+
+  // If it's a single file, return it as a one-item list
+  if (!Array.isArray(r.data)) {
+    return {
+      ok: true,
+      owner,
+      repo,
+      branch,
+      path: targetPath || '/',
+      entries: [{
+        name: r.data.name,
+        path: r.data.path,
+        type: 'file',
+        size: r.data.size || 0,
+      }],
+    };
+  }
+
+  // Directory listing
+  const entries = r.data.map(item => ({
+    name: item.name,
+    path: item.path,
+    type: item.type === 'dir' ? 'dir' : 'file',
+    size: item.size || 0,
+  }));
+
+  return {
+    ok: true,
+    owner,
+    repo,
+    branch,
+    path: targetPath || '/',
+    entries,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
   dryRunOneFile,
   readOneFile,
+  listTree,
 };
