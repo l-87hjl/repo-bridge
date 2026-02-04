@@ -1,0 +1,257 @@
+When you create a custom ChatGPT agent, you effectively have three distinct control planes, and they behave very differently:
+
+
+---
+
+1️⃣ Instructions box (system / developer prompt)
+
+This is the agent’s constitutional layer.
+
+What it really does
+
+Shapes reasoning habits, defaults, and priorities
+
+Affects how the model interprets ambiguity
+
+Is always present, but not always perfectly recalled verbatim
+
+
+What it’s best for
+
+Identity and role (“You are a repo-scoped research and coding agent…”)
+
+Decision heuristics (“Plan before acting,” “Prefer minimal diffs”)
+
+Safety and refusal rules
+
+When to ask vs act
+
+Tool-selection logic (“Use RepoBridge for writes; never simulate GitHub”)
+
+
+What it’s not good at
+
+Long procedures
+
+Detailed APIs
+
+Large lists of rules
+
+Anything you expect the agent to look up or update
+
+
+Think of this as behavioral gravity, not a rulebook.
+
+
+---
+
+2️⃣ Uploaded files (MDs, PDFs, schemas, examples)
+
+This is the agent’s reference library.
+
+What it really does
+
+Provides explicit, quotable knowledge
+
+Can be read selectively and summarized
+
+Is much better for structured or evolving content
+
+Can be treated as “authoritative source material”
+
+
+What it’s best for
+
+“How to use RepoBridge”
+
+Coding conventions
+
+Folder structures
+
+API payload examples
+
+Checklists
+
+Things that change over time
+
+
+Critical nuance Uploading a file does not mean the agent will reliably use it
+unless the instructions explicitly tell it to read it.
+
+So uploaded files are passive unless activated.
+
+
+---
+
+3️⃣ Actions (RepoBridge, APIs, tools)
+
+This is the agent’s hands.
+
+What actions really do
+
+Provide capabilities, not intent
+
+Define what is possible, not what is wise
+
+Enforce schemas, auth, and mechanical constraints
+
+
+RepoBridge being an action is exactly right:
+it is the only layer that can hard-prevent mistakes.
+
+Actions should enforce
+
+Write scope
+
+Branch restrictions
+
+Path allowlists
+
+Required parameters
+
+Refusal on unsafe calls
+
+
+Actions should not rely on instructions for safety.
+
+
+---
+
+The key insight (this is the part most people miss)
+
+> Instructions persuade.
+Files inform.
+Actions enforce.
+
+
+
+If you put something:
+
+only in instructions → it may be forgotten or optimized past
+
+only in a file → it may never be read
+
+only in an action → it may be too rigid or too dumb
+
+
+The robust design uses all three on purpose.
+
+
+---
+
+The correct division of responsibility
+
+🧠 Instructions box should say (short, stable)
+
+What kind of agent this is
+
+How cautious it should be
+
+When to read files
+
+When to use actions
+
+When to stop and ask
+
+
+Example pattern (conceptual, not verbatim):
+
+> Before any RepoBridge write:
+
+1. Read the uploaded RepoBridge usage file
+
+
+2. Summarize applicable constraints
+
+
+3. Propose a plan
+
+
+4. Wait for confirmation unless explicitly authorized
+
+
+
+
+
+That’s it. No giant lists.
+
+
+---
+
+📚 Uploaded files should contain (detailed, changeable)
+
+RepoBridge API semantics
+
+“How to use list properly”
+
+Naming conventions
+
+Branching rules
+
+Examples of good vs bad calls
+
+Versioned policies
+
+
+These files become living documentation.
+
+
+---
+
+🛠 Actions (RepoBridge) should enforce (non-negotiable)
+
+Auth scope
+
+Write permissions
+
+Branch restrictions
+
+Required dry-run flags
+
+Schema validation
+
+Hard refusals
+
+
+If something would be catastrophic if ignored, it belongs here.
+
+
+---
+
+A clean mental model
+
+Layer	Role	Failure mode
+
+Instructions	Judgment	Forgetting / drift
+Files	Knowledge	Not read
+Actions	Reality	Inflexible but safe
+
+
+You want judgment + knowledge, backed by reality.
+
+
+---
+
+My strong recommendation for your setup
+
+For a RepoBridge-powered agent:
+
+1. Keep the instructions box lean
+(identity, safety posture, read-first ritual)
+
+
+2. Upload one canonical doc
+e.g. REPOBRIDGE_AGENT_GUIDE.md
+
+
+3. Explicitly require reading it in instructions
+
+
+4. Enforce critical constraints in RepoBridge itself
+
+
+
+That combination is stable, scalable, and survives model variance.
+
+
+---
