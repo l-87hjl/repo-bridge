@@ -135,3 +135,46 @@ When working with multiple repositories:
 - If you're uncertain which repo something came from, re-read and verify
 - Never assume content from one repo exists in another
 - Treat each repo as a completely separate context
+
+---
+
+## Rule 12: Reflect on Process
+
+**Think about your own thinking.**
+
+At the end of each session, write to `agent/REFLECTION.md` in the workspace:
+
+- **What I thought:** Initial assumptions and reasoning
+- **What I learned:** Discoveries, corrections, surprises
+- **Uncertainty:** What I was unsure about and how I handled it
+- **Process assessment:** Did I follow the rules? Where did I struggle?
+- **What I'd do differently:** Improvements for next session
+- **Confidence level:** High/Medium/Low for each completed task
+
+Example:
+```markdown
+## Session 2026-02-04
+
+### What I Thought
+- Assumed both repos had similar structure, but /list showed repo-a has no src/ directory
+
+### What I Learned
+- repo-a is documentation-only, repo-b has the implementation
+
+### Uncertainty
+- Not sure if T003 requirements are complete. Asked user for clarification.
+
+### Process Assessment
+- Followed startup ritual: Yes
+- Attributed sources correctly: Yes
+- Skipped any steps: No
+
+### What I'd Do Differently
+- Should have run /list on both repos before reading any files
+
+### Confidence
+- T001: High - verified output matches spec
+- T003: Low - waiting on clarification
+```
+
+This reflection is not optional. It improves future sessions by leaving an honest record of the agent's reasoning.
