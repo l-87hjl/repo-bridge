@@ -28,7 +28,7 @@ const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
   .filter(Boolean);
 
 app.get('/', (req, res) => {
-  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/github/dryrun'] });
+  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/github/dryrun'] });
 });
 
 app.get('/health', (req, res) => {
@@ -269,6 +269,45 @@ app.post('/read', requireAuth, async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ ok: false, error: 'ReadFailed', message: e?.message || String(e) });
+  }
+});
+
+app.post('/list', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+
+    // Allow repo like "owner/name" too
+    let owner = b.owner;
+    let repo = b.repo;
+    if (!owner && typeof repo === 'string' && repo.includes('/')) {
+      const [o, r] = repo.split('/');
+      owner = o;
+      repo = r;
+    }
+
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path || '';
+    const installationId = b.installationId;
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: owner, repo. Optional: path (defaults to root), branch (defaults to main)');
+    }
+
+    // Check allowlists
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { listTree } = require('./github');
+    const result = await listTree({ owner, repo, branch, path, installationId });
+    return res.json(result);
+  } catch (e) {
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found' });
+    }
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'ListFailed', message: e?.message || String(e) });
   }
 });
 
