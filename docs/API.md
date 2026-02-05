@@ -14,9 +14,10 @@ For production deployments, replace with your deployed URL.
 
 All endpoints accept an `owner/repo` parameter, enabling operations across multiple repositories. Key multi-repo endpoints:
 
-- **`/batch/read`** — Read up to 10 files from any combination of repos in one call
+- **`/batchRead`** (or `/batch/read`) — Read up to 10 files from any combination of repos in one call
 - **`/copy`** — Copy a file from one repo to another in one call
 - **`/apply`** with `changes[]` — Write multiple files to a repo in one call
+- **`/dryRun`** (or `/github/dryrun`) — Preview changes without committing
 
 See [MULTI_REPO_GUIDE.md](MULTI_REPO_GUIDE.md) for patterns and examples.
 
@@ -370,9 +371,11 @@ List files and directories in a repository path. Can target any accessible repo.
 
 ---
 
-### POST /batch/read
+### POST /batchRead
 
 Read multiple files from one or more repositories in a single call. Files are read concurrently. Maximum 10 files per request.
+
+Also available at `/batch/read` for backward compatibility.
 
 **Request Body**
 
@@ -416,14 +419,14 @@ Note: Individual file reads can fail without failing the entire batch. Check `ok
 
 Copy a file from one repository to another in a single call. Reads from the source and writes to the destination.
 
-**Request Body**
+**Request Body (v1.2.1 format)**
 
 ```json
 {
-  "source": "myorg/agent-boot",
-  "srcPath": "templates/STATE.template.json",
-  "destination": "myorg/agent-workspace",
-  "destPath": "agent/STATE.json",
+  "sourceRepo": "myorg/agent-boot",
+  "sourcePath": "templates/STATE.template.json",
+  "destinationRepo": "myorg/agent-workspace",
+  "destinationPath": "agent/STATE.json",
   "message": "Initialize state from template"
 }
 ```
@@ -432,13 +435,15 @@ Copy a file from one repository to another in a single call. Reads from the sour
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `source` | string | Yes | Source repo in `owner/repo` format |
-| `srcPath` | string | Yes | File path in source repo |
-| `srcBranch` | string | No | Source branch (defaults to `main`) |
-| `destination` | string | Yes | Destination repo in `owner/repo` format |
-| `destPath` | string | No | Path in destination (defaults to same as srcPath) |
-| `destBranch` | string | No | Destination branch (defaults to `main`) |
+| `sourceRepo` | string | Yes | Source repo in `owner/repo` format |
+| `sourcePath` | string | Yes | File path in source repo |
+| `sourceBranch` | string | No | Source branch (defaults to `main`) |
+| `destinationRepo` | string | Yes | Destination repo in `owner/repo` format |
+| `destinationPath` | string | No | Path in destination (defaults to same as sourcePath) |
+| `destinationBranch` | string | No | Destination branch (defaults to `main`) |
 | `message` | string | No | Commit message (auto-generated if omitted) |
+
+Also accepts legacy field names: `source`/`srcPath`/`destination`/`destPath`.
 
 **Success Response (200)**
 
@@ -475,9 +480,11 @@ Copy a file from one repository to another in a single call. Reads from the sour
 
 ---
 
-### POST /github/dryrun
+### POST /dryRun
 
 Preview what would be applied without making any changes. This endpoint does not call the GitHub API.
+
+Also available at `/github/dryrun` for backward compatibility.
 
 **Request Body**
 
