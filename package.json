@@ -1,8 +1,8 @@
 {
   "name": "repo-bridge",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
-  "description": "Minimal Render-deployable service that will later bridge ChatGPT specs to GitHub operations.",
+  "description": "Multi-repo bridge for AI agents to GitHub. Read, write, list, copy, and batch-read files across repositories.",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",

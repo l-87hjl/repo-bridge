@@ -10,9 +10,21 @@ For production deployments, replace with your deployed URL.
 
 ---
 
+## Multi-Repo Support
+
+All endpoints accept an `owner/repo` parameter, enabling operations across multiple repositories. Key multi-repo endpoints:
+
+- **`/batch/read`** — Read up to 10 files from any combination of repos in one call
+- **`/copy`** — Copy a file from one repo to another in one call
+- **`/apply`** with `changes[]` — Write multiple files to a repo in one call
+
+See [MULTI_REPO_GUIDE.md](MULTI_REPO_GUIDE.md) for patterns and examples.
+
+---
+
 ## Authentication
 
-If `API_AUTH_TOKEN` is set in the environment, all `/apply` and `/github/dryrun` requests must include an Authorization header:
+If `API_AUTH_TOKEN` is set in the environment, all endpoints (except `/health`) require an Authorization header:
 
 ```
 Authorization: Bearer <your-token>
@@ -318,6 +330,151 @@ Read a file from a GitHub repository.
 
 ---
 
+### POST /list
+
+List files and directories in a repository path. Can target any accessible repo.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repository-name",
+  "path": "src",
+  "branch": "main"
+}
+```
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `path` | string | No | Directory path (defaults to root) |
+| `branch` | string | No | Target branch (defaults to `main`) |
+
+**Success Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "username",
+  "repo": "repository-name",
+  "branch": "main",
+  "path": "src",
+  "entries": [
+    { "name": "server.js", "path": "src/server.js", "type": "file", "size": 5432 },
+    { "name": "utils", "path": "src/utils", "type": "dir", "size": 0 }
+  ]
+}
+```
+
+---
+
+### POST /batch/read
+
+Read multiple files from one or more repositories in a single call. Files are read concurrently. Maximum 10 files per request.
+
+**Request Body**
+
+```json
+{
+  "files": [
+    { "repo": "myorg/agent-boot", "path": "AGENT_ENTRY.md" },
+    { "repo": "myorg/agent-workspace", "path": "agent/STATE.json" },
+    { "repo": "myorg/ai-agent-contract", "path": "capabilities/ALLOWED_ACTIONS.md" }
+  ]
+}
+```
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `files` | array | Yes | Array of file objects (max 10) |
+| `files[].repo` | string | Yes | Repository in `owner/repo` format |
+| `files[].path` | string | Yes | File path within the repository |
+| `files[].branch` | string | No | Target branch (defaults to `main`) |
+
+**Success Response (200)**
+
+```json
+{
+  "ok": true,
+  "files": [
+    { "ok": true, "owner": "myorg", "repo": "agent-boot", "path": "AGENT_ENTRY.md", "content": "...", "sha": "...", "size": 456 },
+    { "ok": true, "owner": "myorg", "repo": "agent-workspace", "path": "agent/STATE.json", "content": "...", "sha": "...", "size": 789 },
+    { "ok": false, "owner": "myorg", "repo": "ai-agent-contract", "path": "capabilities/ALLOWED_ACTIONS.md", "error": "File not found" }
+  ]
+}
+```
+
+Note: Individual file reads can fail without failing the entire batch. Check `ok` on each entry.
+
+---
+
+### POST /copy
+
+Copy a file from one repository to another in a single call. Reads from the source and writes to the destination.
+
+**Request Body**
+
+```json
+{
+  "source": "myorg/agent-boot",
+  "srcPath": "templates/STATE.template.json",
+  "destination": "myorg/agent-workspace",
+  "destPath": "agent/STATE.json",
+  "message": "Initialize state from template"
+}
+```
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `source` | string | Yes | Source repo in `owner/repo` format |
+| `srcPath` | string | Yes | File path in source repo |
+| `srcBranch` | string | No | Source branch (defaults to `main`) |
+| `destination` | string | Yes | Destination repo in `owner/repo` format |
+| `destPath` | string | No | Path in destination (defaults to same as srcPath) |
+| `destBranch` | string | No | Destination branch (defaults to `main`) |
+| `message` | string | No | Commit message (auto-generated if omitted) |
+
+**Success Response (200)**
+
+```json
+{
+  "ok": true,
+  "copied": true,
+  "source": {
+    "owner": "myorg",
+    "repo": "agent-boot",
+    "branch": "main",
+    "path": "templates/STATE.template.json",
+    "sha": "abc123..."
+  },
+  "destination": {
+    "committed": true,
+    "owner": "myorg",
+    "repo": "agent-workspace",
+    "branch": "main",
+    "path": "agent/STATE.json",
+    "created": true,
+    "updated": false,
+    "commitSha": "def456...",
+    "contentSha": "ghi789..."
+  }
+}
+```
+
+**Error Responses**
+
+*404 Not Found* - Source file does not exist
+*403 Forbidden* - Source or destination repo not in allowlist
+*403 RepoReadOnly* - Destination repo is read-only
+
+---
+
 ### POST /github/dryrun
 
 Preview what would be applied without making any changes. This endpoint does not call the GitHub API.
@@ -328,6 +485,7 @@ Same as `/apply` (both formats supported).
 
 **Response (200)**
 
+Single file:
 ```json
 {
   "ok": true,
@@ -339,6 +497,17 @@ Same as `/apply` (both formats supported).
     "bytes": 19,
     "message": "Commit message"
   }
+}
+```
+
+Multi-file (with `changes[]`):
+```json
+{
+  "ok": true,
+  "wouldApply": [
+    { "owner": "username", "repo": "repository-name", "branch": "main", "path": "file1.txt", "bytes": 19, "message": "Commit message" },
+    { "owner": "username", "repo": "repository-name", "branch": "main", "path": "file2.txt", "bytes": 42, "message": "Commit message" }
+  ]
 }
 ```
 
@@ -356,6 +525,9 @@ Same as `/apply` (both formats supported).
 | 500 | ServerError | Internal server error |
 | 500 | ApplyFailed | GitHub API call failed (write) |
 | 500 | ReadFailed | GitHub API call failed (read) |
+| 500 | CopyFailed | Cross-repo copy operation failed |
+| 500 | BatchReadFailed | Batch read operation failed |
+| 500 | ListFailed | Directory listing failed |
 
 ---
 

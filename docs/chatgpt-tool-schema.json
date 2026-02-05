@@ -1,401 +1,336 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "repo-bridge API",
-    "description": "Bridge AI services to GitHub operations. Read, create, or update files in repositories via REST API.",
-    "version": "0.2.0"
+    "title": "repo-bridge",
+    "version": "1.2.0"
   },
   "servers": [
     {
-      "url": "https://your-app.onrender.com",
-      "description": "Production server (update with your Render URL)"
+      "url": "https://repo-bridge.onrender.com"
     }
   ],
   "paths": {
-    "/apply": {
+    "/list": {
       "post": {
-        "operationId": "applyFileChange",
-        "summary": "Create or update a file in a GitHub repository",
-        "description": "Creates a new file or updates an existing file in the specified repository. Always use dryRun: true first to preview changes before committing.",
+        "operationId": "listDirectory",
+        "summary": "List files and directories in a GitHub repository. Can target any accessible repo by changing the repo parameter.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApplyRequest"
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "description": "Repository in owner/name format. Can be any accessible repo."
+                  },
+                  "path": {
+                    "type": "string",
+                    "description": "Directory path. Use empty string for repository root."
+                  },
+                  "branch": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "Directory listing with entries array",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ApplyResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad Request - Missing required fields",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Unauthorized - Invalid or missing auth token",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "Forbidden - Repository or path not in allowlist",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Server Error - GitHub API or internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "type": "object"
                 }
               }
             }
           }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/read": {
       "post": {
         "operationId": "readFile",
-        "summary": "Read a file from a GitHub repository",
-        "description": "Reads and returns the contents of a file from the specified repository. Use this to read existing code before making modifications.",
+        "summary": "Read a file from any accessible GitHub repository. Change the repo parameter to read from different repos.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ReadRequest"
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "description": "Repository in owner/name format. Can be any accessible repo."
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Success",
+            "description": "File contents with ok, content, sha, size fields",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ReadResponse"
+                  "type": "object"
                 }
               }
             }
-          },
-          "404": {
-            "description": "File not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+          }
+        }
+      }
+    },
+    "/batch/read": {
+      "post": {
+        "operationId": "batchRead",
+        "summary": "Read multiple files from one or more repos in a single call. Each file can target a different repository. Max 10 files.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "description": "Array of files to read. Each entry has repo (owner/name), path, and optional branch. Each can target a different repository.",
+                    "items": {
+                      "type": "object",
+                      "required": ["repo", "path"],
+                      "properties": {
+                        "repo": {
+                          "type": "string",
+                          "description": "Repository in owner/name format"
+                        },
+                        "path": {
+                          "type": "string"
+                        },
+                        "branch": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
                 }
               }
             }
           }
         },
-        "security": [
-          {
-            "BearerAuth": []
+        "responses": {
+          "200": {
+            "description": "Array of file read results in files field. Each has ok, content, owner, repo, path. Individual reads can fail without failing the batch.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
           }
-        ]
+        }
+      }
+    },
+    "/copy": {
+      "post": {
+        "operationId": "copyFile",
+        "summary": "Copy a file from one repository to another in a single call. Reads from source repo and writes to destination repo.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "srcPath", "destination"],
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "description": "Source repository in owner/name format"
+                  },
+                  "srcPath": {
+                    "type": "string",
+                    "description": "File path in the source repository"
+                  },
+                  "srcBranch": {
+                    "type": "string",
+                    "description": "Source branch. Defaults to main."
+                  },
+                  "destination": {
+                    "type": "string",
+                    "description": "Destination repository in owner/name format"
+                  },
+                  "destPath": {
+                    "type": "string",
+                    "description": "File path in destination. Defaults to same as srcPath."
+                  },
+                  "destBranch": {
+                    "type": "string",
+                    "description": "Destination branch. Defaults to main."
+                  },
+                  "message": {
+                    "type": "string",
+                    "description": "Commit message. Auto-generated if omitted."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Copy result with source and destination details including commit SHA",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apply": {
+      "post": {
+        "operationId": "applyFile",
+        "summary": "Create or update files in a GitHub repository. Supports single file (path+content) or multiple files (changes array).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": {
+                    "type": "string",
+                    "description": "Repository in owner/name format. Can target any writable repo."
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  },
+                  "dryRun": {
+                    "type": "boolean",
+                    "description": "If true, preview only without committing. Makes no GitHub API calls."
+                  },
+                  "changes": {
+                    "type": "array",
+                    "description": "Alternative to path+content. Array of {path, content} objects for multi-file writes to the same repo.",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "path": {
+                          "type": "string"
+                        },
+                        "content": {
+                          "type": "string"
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Apply result with commitSha, created/updated flags",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/github/dryrun": {
       "post": {
-        "operationId": "dryRunFileChange",
-        "summary": "Preview a file change without committing",
-        "description": "Returns what would be applied without making any changes. Makes NO GitHub API calls. Use this to verify changes before calling /apply.",
+        "operationId": "dryRun",
+        "summary": "Preview a file change without committing. Makes NO GitHub API calls. Use to verify changes before /apply.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ApplyRequest"
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": {
+                    "type": "string"
+                  },
+                  "path": {
+                    "type": "string"
+                  },
+                  "content": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "branch": {
+                    "type": "string"
+                  }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Dry run result",
+            "description": "Dry run result showing what would be applied",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/DryRunResponse"
+                  "type": "object"
                 }
               }
             }
           }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
+        }
       }
     },
     "/health": {
       "get": {
         "operationId": "healthCheck",
-        "summary": "Check if the service is running",
-        "description": "Returns health status and timestamp. No authentication required.",
+        "summary": "Check service status",
         "responses": {
           "200": {
-            "description": "Service is healthy",
+            "description": "Health status",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
+                  "type": "object"
                 }
               }
             }
           }
         }
-      }
-    }
-  },
-  "components": {
-    "schemas": {
-      "ReadRequest": {
-        "type": "object",
-        "required": ["repo", "path"],
-        "properties": {
-          "repo": {
-            "type": "string",
-            "description": "Repository in 'owner/name' format",
-            "example": "myorg/myrepo"
-          },
-          "path": {
-            "type": "string",
-            "description": "File path within the repository",
-            "example": "src/index.js"
-          },
-          "branch": {
-            "type": "string",
-            "description": "Target branch (defaults to 'main')",
-            "default": "main"
-          }
-        }
-      },
-      "ReadResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "example": true
-          },
-          "owner": {
-            "type": "string",
-            "example": "myorg"
-          },
-          "repo": {
-            "type": "string",
-            "example": "myrepo"
-          },
-          "branch": {
-            "type": "string",
-            "example": "main"
-          },
-          "path": {
-            "type": "string",
-            "example": "src/index.js"
-          },
-          "sha": {
-            "type": "string",
-            "description": "SHA of the file"
-          },
-          "size": {
-            "type": "integer",
-            "description": "Size of file in bytes"
-          },
-          "content": {
-            "type": "string",
-            "description": "File contents (decoded UTF-8)"
-          }
-        }
-      },
-      "ApplyRequest": {
-        "type": "object",
-        "required": ["repo", "path", "content", "message"],
-        "properties": {
-          "repo": {
-            "type": "string",
-            "description": "Repository in 'owner/name' format",
-            "example": "myorg/myrepo"
-          },
-          "path": {
-            "type": "string",
-            "description": "File path within the repository",
-            "example": "src/index.js"
-          },
-          "content": {
-            "type": "string",
-            "description": "File content to write"
-          },
-          "message": {
-            "type": "string",
-            "description": "Commit message",
-            "example": "Add new feature"
-          },
-          "branch": {
-            "type": "string",
-            "description": "Target branch (defaults to 'main')",
-            "default": "main"
-          },
-          "dryRun": {
-            "type": "boolean",
-            "description": "If true, preview only without committing",
-            "default": false
-          }
-        }
-      },
-      "ApplyResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "example": true
-          },
-          "committed": {
-            "type": "boolean",
-            "example": true
-          },
-          "owner": {
-            "type": "string",
-            "example": "myorg"
-          },
-          "repo": {
-            "type": "string",
-            "example": "myrepo"
-          },
-          "branch": {
-            "type": "string",
-            "example": "main"
-          },
-          "path": {
-            "type": "string",
-            "example": "src/index.js"
-          },
-          "created": {
-            "type": "boolean",
-            "description": "True if file was newly created"
-          },
-          "updated": {
-            "type": "boolean",
-            "description": "True if file was updated (existed before)"
-          },
-          "commitSha": {
-            "type": "string",
-            "description": "SHA of the commit"
-          },
-          "contentSha": {
-            "type": "string",
-            "description": "SHA of the file content"
-          }
-        }
-      },
-      "DryRunResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "example": true
-          },
-          "wouldApply": {
-            "type": "object",
-            "properties": {
-              "owner": {
-                "type": "string"
-              },
-              "repo": {
-                "type": "string"
-              },
-              "branch": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "bytes": {
-                "type": "integer",
-                "description": "Size of content in bytes"
-              },
-              "message": {
-                "type": "string"
-              }
-            }
-          }
-        }
-      },
-      "HealthResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "example": true
-          },
-          "service": {
-            "type": "string",
-            "example": "repo-bridge"
-          },
-          "time": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "ErrorResponse": {
-        "type": "object",
-        "properties": {
-          "ok": {
-            "type": "boolean",
-            "example": false
-          },
-          "error": {
-            "type": "string",
-            "enum": ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "ServerError", "ApplyFailed", "ReadFailed"]
-          },
-          "message": {
-            "type": "string"
-          }
-        }
-      }
-    },
-    "securitySchemes": {
-      "BearerAuth": {
-        "type": "http",
-        "scheme": "bearer",
-        "description": "API authentication token (set via API_AUTH_TOKEN env var on server)"
       }
     }
   }
