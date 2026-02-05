@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge API",
-    "description": "Bridge AI services to GitHub operations. Read, create, or update files in repositories via REST API.",
-    "version": "0.2.0"
+    "description": "Multi-repo bridge for AI agents to GitHub. Read, write, list, copy, and batch-read files across multiple repositories. Supports cross-repo analysis and file transfer.",
+    "version": "0.3.0"
   },
   "servers": [
     {
@@ -12,11 +12,187 @@
     }
   ],
   "paths": {
+    "/read": {
+      "post": {
+        "operationId": "readFile",
+        "summary": "Read a file from any accessible GitHub repository",
+        "description": "Reads and returns the contents of a file from the specified repository. You can read from ANY accessible repo by specifying different owner/repo values. Use this to read existing code before making modifications, or to inspect files across multiple repositories for cross-repo analysis.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/list": {
+      "post": {
+        "operationId": "listDirectory",
+        "summary": "List files and directories in any accessible GitHub repository",
+        "description": "Lists the contents of a directory in the specified repository. Use this to explore repository structure, discover files, and understand how multiple repositories are organized. Essential for multi-repo analysis: list directories across different repos to understand their relationships.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ListRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Path not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/batch/read": {
+      "post": {
+        "operationId": "batchReadFiles",
+        "summary": "Read multiple files from one or more repos in a single call",
+        "description": "Reads up to 10 files from any combination of accessible repositories in a single request. Files are read concurrently. Use this for cross-repo analysis: compare configurations, review shared patterns, or understand relationships between repositories. Each file in the array can target a different repo.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BatchReadRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success - returns array of file contents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchReadResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
+    "/copy": {
+      "post": {
+        "operationId": "copyFileBetweenRepos",
+        "summary": "Copy a file from one repository to another",
+        "description": "Reads a file from a source repository and writes it to a destination repository in a single atomic call. Use this to transfer files between repos: e.g., copy a template from agent-boot to agent-workspace, or propagate configuration between repos. The destination path defaults to the same path as the source if not specified.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CopyRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File copied successfully",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CopyResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Source file not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Forbidden - source or destination repo not in allowlist, or destination is read-only",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ]
+      }
+    },
     "/apply": {
       "post": {
         "operationId": "applyFileChange",
-        "summary": "Create or update a file in a GitHub repository",
-        "description": "Creates a new file or updates an existing file in the specified repository. Always use dryRun: true first to preview changes before committing.",
+        "summary": "Create or update files in a GitHub repository",
+        "description": "Creates or updates files in the specified repository. Supports single-file (path+content) or multi-file (changes array) writes. Always use dryRun: true first to preview changes before committing. You can target any writable repo by specifying different owner/repo values.",
         "requestBody": {
           "required": true,
           "content": {
@@ -59,7 +235,7 @@
             }
           },
           "403": {
-            "description": "Forbidden - Repository or path not in allowlist",
+            "description": "Forbidden - Repository or path not in allowlist, or repo is read-only",
             "content": {
               "application/json": {
                 "schema": {
@@ -70,50 +246,6 @@
           },
           "500": {
             "description": "Server Error - GitHub API or internal error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "BearerAuth": []
-          }
-        ]
-      }
-    },
-    "/read": {
-      "post": {
-        "operationId": "readFile",
-        "summary": "Read a file from a GitHub repository",
-        "description": "Reads and returns the contents of a file from the specified repository. Use this to read existing code before making modifications.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/ReadRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Success",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ReadResponse"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "File not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -192,7 +324,7 @@
         "properties": {
           "repo": {
             "type": "string",
-            "description": "Repository in 'owner/name' format",
+            "description": "Repository in 'owner/name' format. Can target ANY accessible repo.",
             "example": "myorg/myrepo"
           },
           "path": {
@@ -244,23 +376,222 @@
           }
         }
       },
-      "ApplyRequest": {
+      "ListRequest": {
         "type": "object",
-        "required": ["repo", "path", "content", "message"],
+        "required": ["repo"],
         "properties": {
           "repo": {
             "type": "string",
-            "description": "Repository in 'owner/name' format",
+            "description": "Repository in 'owner/name' format. Can target ANY accessible repo.",
             "example": "myorg/myrepo"
           },
           "path": {
             "type": "string",
-            "description": "File path within the repository",
+            "description": "Directory path within the repository (defaults to root)",
+            "default": "",
+            "example": "src"
+          },
+          "branch": {
+            "type": "string",
+            "description": "Target branch (defaults to 'main')",
+            "default": "main"
+          }
+        }
+      },
+      "ListResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "owner": {
+            "type": "string"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "branch": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "description": "File or directory name"
+                },
+                "path": {
+                  "type": "string",
+                  "description": "Full path within the repository"
+                },
+                "type": {
+                  "type": "string",
+                  "enum": ["file", "dir"],
+                  "description": "Whether entry is a file or directory"
+                },
+                "size": {
+                  "type": "integer",
+                  "description": "File size in bytes (0 for directories)"
+                }
+              }
+            }
+          }
+        }
+      },
+      "BatchReadRequest": {
+        "type": "object",
+        "required": ["files"],
+        "properties": {
+          "files": {
+            "type": "array",
+            "description": "Array of files to read. Each can target a DIFFERENT repository. Maximum 10 files.",
+            "maxItems": 10,
+            "items": {
+              "type": "object",
+              "required": ["repo", "path"],
+              "properties": {
+                "repo": {
+                  "type": "string",
+                  "description": "Repository in 'owner/name' format",
+                  "example": "myorg/repo-a"
+                },
+                "path": {
+                  "type": "string",
+                  "description": "File path within the repository",
+                  "example": "README.md"
+                },
+                "branch": {
+                  "type": "string",
+                  "description": "Target branch (defaults to 'main')",
+                  "default": "main"
+                }
+              }
+            },
+            "example": [
+              { "repo": "myorg/agent-boot", "path": "AGENT_ENTRY.md" },
+              { "repo": "myorg/agent-workspace", "path": "agent/STATE.json" },
+              { "repo": "myorg/ai-agent-contract", "path": "capabilities/ALLOWED_ACTIONS.md" }
+            ]
+          }
+        }
+      },
+      "BatchReadResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "files": {
+            "type": "array",
+            "description": "Array of file read results. Each entry includes owner, repo, path, content (or error if read failed).",
+            "items": {
+              "$ref": "#/components/schemas/ReadResponse"
+            }
+          }
+        }
+      },
+      "CopyRequest": {
+        "type": "object",
+        "required": ["source", "srcPath", "destination"],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Source repository in 'owner/name' format",
+            "example": "myorg/agent-boot"
+          },
+          "srcPath": {
+            "type": "string",
+            "description": "File path in the source repository",
+            "example": "contract/AGENT_RULES.md"
+          },
+          "srcBranch": {
+            "type": "string",
+            "description": "Source branch (defaults to 'main')",
+            "default": "main"
+          },
+          "destination": {
+            "type": "string",
+            "description": "Destination repository in 'owner/name' format",
+            "example": "myorg/agent-workspace"
+          },
+          "destPath": {
+            "type": "string",
+            "description": "File path in the destination repository (defaults to same as srcPath)",
+            "example": "reference/AGENT_RULES.md"
+          },
+          "destBranch": {
+            "type": "string",
+            "description": "Destination branch (defaults to 'main')",
+            "default": "main"
+          },
+          "message": {
+            "type": "string",
+            "description": "Commit message (auto-generated if omitted)",
+            "example": "Copy AGENT_RULES.md from agent-boot"
+          }
+        }
+      },
+      "CopyResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "example": true
+          },
+          "copied": {
+            "type": "boolean",
+            "example": true
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "owner": { "type": "string" },
+              "repo": { "type": "string" },
+              "branch": { "type": "string" },
+              "path": { "type": "string" },
+              "sha": { "type": "string" }
+            }
+          },
+          "destination": {
+            "type": "object",
+            "properties": {
+              "committed": { "type": "boolean" },
+              "owner": { "type": "string" },
+              "repo": { "type": "string" },
+              "branch": { "type": "string" },
+              "path": { "type": "string" },
+              "created": { "type": "boolean" },
+              "updated": { "type": "boolean" },
+              "commitSha": { "type": "string" },
+              "contentSha": { "type": "string" }
+            }
+          }
+        }
+      },
+      "ApplyRequest": {
+        "type": "object",
+        "required": ["repo", "message"],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "Repository in 'owner/name' format. Can target ANY writable repo.",
+            "example": "myorg/myrepo"
+          },
+          "path": {
+            "type": "string",
+            "description": "File path within the repository (required for single-file mode)",
             "example": "src/index.js"
           },
           "content": {
             "type": "string",
-            "description": "File content to write"
+            "description": "File content to write (required for single-file mode)"
           },
           "message": {
             "type": "string",
@@ -271,6 +602,24 @@
             "type": "string",
             "description": "Target branch (defaults to 'main')",
             "default": "main"
+          },
+          "changes": {
+            "type": "array",
+            "description": "Array of files to write (alternative to path+content for multi-file commits)",
+            "items": {
+              "type": "object",
+              "required": ["path", "content"],
+              "properties": {
+                "path": {
+                  "type": "string",
+                  "description": "File path within the repository"
+                },
+                "content": {
+                  "type": "string",
+                  "description": "File content to write"
+                }
+              }
+            }
           },
           "dryRun": {
             "type": "boolean",
@@ -321,6 +670,13 @@
           "contentSha": {
             "type": "string",
             "description": "SHA of the file content"
+          },
+          "results": {
+            "type": "array",
+            "description": "Array of results when using multi-file changes[]",
+            "items": {
+              "type": "object"
+            }
           }
         }
       },
@@ -332,28 +688,34 @@
             "example": true
           },
           "wouldApply": {
-            "type": "object",
-            "properties": {
-              "owner": {
-                "type": "string"
+            "description": "Object (single file) or array (multi-file) of what would be applied",
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "owner": { "type": "string" },
+                  "repo": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "path": { "type": "string" },
+                  "bytes": { "type": "integer", "description": "Size of content in bytes" },
+                  "message": { "type": "string" }
+                }
               },
-              "repo": {
-                "type": "string"
-              },
-              "branch": {
-                "type": "string"
-              },
-              "path": {
-                "type": "string"
-              },
-              "bytes": {
-                "type": "integer",
-                "description": "Size of content in bytes"
-              },
-              "message": {
-                "type": "string"
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "owner": { "type": "string" },
+                    "repo": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "path": { "type": "string" },
+                    "bytes": { "type": "integer" },
+                    "message": { "type": "string" }
+                  }
+                }
               }
-            }
+            ]
           }
         }
       },
@@ -383,7 +745,7 @@
           },
           "error": {
             "type": "string",
-            "enum": ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "ServerError", "ApplyFailed", "ReadFailed"]
+            "enum": ["BadRequest", "Unauthorized", "Forbidden", "NotFound", "RepoReadOnly", "ServerError", "ApplyFailed", "ReadFailed", "CopyFailed", "BatchReadFailed", "ListFailed"]
           },
           "message": {
             "type": "string"

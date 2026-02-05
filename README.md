@@ -1,19 +1,23 @@
 # repo-bridge
 
-A minimal Node.js/Express microservice that bridges AI services (like ChatGPT) to GitHub operations. It provides REST API endpoints to programmatically create or update files in GitHub repositories using GitHub App authentication.
+A multi-repo Node.js/Express microservice that bridges AI agents to GitHub operations. Read, write, list, copy, and batch-read files across **multiple repositories** using GitHub App authentication.
 
-Repo-bridge is designed as a governed interface between AI agents and GitHub, emphasizing explicit authorization, scoped access, and reversible changes.
+Repo-bridge is designed as a governed interface between AI agents and GitHub, emphasizing explicit authorization, scoped access, reversible changes, and **cross-repo analysis**.
 
 ## Features
 
-- **Read** files from GitHub repositories
+- **Multi-repo operations** — Every endpoint accepts `owner/repo`, enabling cross-repo workflows
+- **Batch read** — Read up to 10 files from any combination of repos in one call (`/batch/read`)
+- **Cross-repo copy** — Copy files between repositories in a single call (`/copy`)
+- **Multi-file writes** — Write multiple files per commit with `changes[]` array
+- **Read** files from any accessible GitHub repository
+- **List** directory contents for repository exploration
 - **Create or update** files in GitHub repositories via REST API
 - GitHub App authentication (no personal access tokens needed)
 - Dry-run mode for previewing changes without committing (guaranteed safe - no API calls)
-- Default branch targeting (`main` by default)
+- Read-only repository mode for protecting sensitive repos
 - API authentication via Bearer token
 - Repository and path allowlists for access control
-- Support for multiple request formats
 - Security headers via Helmet
 - Designed for deployment on Render
 
@@ -77,8 +81,11 @@ The server will start on `http://localhost:3000`.
 |--------|----------|-------------|
 | GET | `/` | Service info and available endpoints |
 | GET | `/health` | Health check with timestamp |
-| POST | `/read` | Read a file from GitHub |
-| POST | `/apply` | Create or update a file in GitHub |
+| POST | `/read` | Read a file from any accessible repo |
+| POST | `/list` | List directory contents of any repo |
+| POST | `/batch/read` | Read up to 10 files from multiple repos |
+| POST | `/copy` | Copy a file between repositories |
+| POST | `/apply` | Create or update file(s) in a repo |
 | POST | `/github/dryrun` | Preview changes without committing |
 
 See [docs/API.md](docs/API.md) for detailed API documentation.
@@ -166,9 +173,18 @@ repo-bridge/
 ├── docs/
 │   ├── API.md                 # API documentation
 │   ├── README_AI.md           # Instructions for AI agents
+│   ├── MULTI_REPO_GUIDE.md    # Multi-repo analysis patterns
+│   ├── AGENT_SETUP.md         # Multi-layer security setup
+│   ├── STANDARDIZATION_GUIDE.md # Agent repo structure guide
+│   ├── REPO_ACCESS_MAP.md     # Access control matrix
+│   ├── CHATGPT-AGENT-SETUP-RECS # ChatGPT agent setup guidance
 │   ├── CHANGELOG_AI.md        # AI change log (append-only)
 │   ├── STATE.md               # Repository state summary
-│   └── chatgpt-tool-schema.json  # OpenAPI schema for ChatGPT
+│   └── chatgpt-tool-schema.json  # OpenAPI schema for integrations
+├── templates/                 # Agent mechanism repo templates
+│   ├── agent-boot/            # Boot repo templates (rules, protocols)
+│   ├── agent-contract/        # Contract repo templates (specs)
+│   └── agent-workspace/       # Workspace repo templates (active state)
 ├── archive/                   # Archived old code versions
 ├── .env.example               # Example environment configuration
 ├── .gitignore
@@ -181,9 +197,18 @@ repo-bridge/
 For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
 
 1. **Read** [docs/README_AI.md](docs/README_AI.md) for operational instructions
-2. **Import** [docs/chatgpt-tool-schema.json](docs/chatgpt-tool-schema.json) as a custom tool/action
-3. **Update** [docs/CHANGELOG_AI.md](docs/CHANGELOG_AI.md) after each commit
-4. **Maintain** [docs/STATE.md](docs/STATE.md) when repo structure changes
+2. **Read** [docs/MULTI_REPO_GUIDE.md](docs/MULTI_REPO_GUIDE.md) for multi-repo patterns
+3. **Import** [docs/chatgpt-tool-schema.json](docs/chatgpt-tool-schema.json) as a custom tool/action
+4. **Upload** TAXONOMY.md and README.md from repo-boot as reference files for the agent
+5. **Update** [docs/CHANGELOG_AI.md](docs/CHANGELOG_AI.md) after each commit
+6. **Maintain** [docs/STATE.md](docs/STATE.md) when repo structure changes
+
+### Multi-Repo Setup Tips
+
+- Upload reference files (like TAXONOMY.md from repo-boot) to give the agent context about repo relationships
+- Use `/batch/read` in the agent's boot sequence to load context from multiple repos simultaneously
+- Configure `READ_ONLY_REPOS` to protect boot and contract repos while allowing workspace writes
+- See [docs/CHATGPT-AGENT-SETUP-RECS](docs/CHATGPT-AGENT-SETUP-RECS) for instruction/file/action division guidance
 
 ## Deployment on Render
 

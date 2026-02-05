@@ -2,41 +2,55 @@
 
 This document summarizes the current state of the repo-bridge repository. AI agents should update this file when the repository structure changes significantly.
 
-**Last Updated:** 2026-02-01
+**Last Updated:** 2026-02-05
 
 ## Purpose
 
-repo-bridge is a Node.js/Express microservice that bridges AI services to GitHub operations. It allows programmatic file creation/updates via REST API using GitHub App authentication.
+repo-bridge is a multi-repo Node.js/Express microservice that bridges AI agents to GitHub operations. It provides REST API endpoints to read, write, list, copy, and batch-read files across multiple GitHub repositories using GitHub App authentication.
 
 ## Directory Structure
 
 ```
 repo-bridge/
 ├── src/
-│   ├── server.js          # Express server, routes, middleware
-│   └── github.js          # GitHub API integration (Octokit)
+│   ├── server.js              # Express server, routes, middleware (~525 lines)
+│   └── github.js              # GitHub API integration (Octokit)
 ├── docs/
-│   ├── API.md             # API documentation
-│   ├── README_AI.md       # Instructions for AI agents
-│   ├── CHANGELOG_AI.md    # AI change log (append-only)
-│   └── STATE.md           # This file
-├── archive/               # Archived old code versions
-│   ├── server_old_001.js
-│   └── github_old_001.js
-├── .env.example           # Environment variable template
+│   ├── API.md                 # API documentation
+│   ├── README_AI.md           # Instructions for AI agents
+│   ├── MULTI_REPO_GUIDE.md    # Multi-repo analysis patterns & cross-repo ops
+│   ├── AGENT_SETUP.md         # Multi-layer security setup guide
+│   ├── STANDARDIZATION_GUIDE.md # Agent repo structure guide
+│   ├── REPO_ACCESS_MAP.md     # Access control matrix
+│   ├── CHATGPT-AGENT-SETUP-RECS # ChatGPT agent setup guidance
+│   ├── PRODUCT.md             # Product positioning
+│   ├── CHANGELOG_AI.md        # AI change log (append-only)
+│   ├── STATE.md               # This file
+│   └── chatgpt-tool-schema.json # OpenAPI 3.1.0 schema (v0.3.0)
+├── templates/
+│   ├── agent-boot/            # Boot repo templates (rules, protocols)
+│   ├── agent-contract/        # Contract repo templates (specs)
+│   ├── agent-workspace/       # Workspace repo templates (active state)
+│   └── LICENSE-BSL-1.1.txt    # License template
+├── develop/                   # Development exploration files
+├── archive/                   # Archived old code versions
+├── .env.example               # Environment variable template
 ├── .gitignore
 ├── package.json
 ├── package-lock.json
-└── README.md              # Main documentation
+├── LICENSE                    # BSL 1.1
+└── README.md                  # Main documentation
 ```
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `src/server.js` | Main entry point. Defines routes, auth middleware, allowlist checks |
-| `src/github.js` | GitHub API wrapper. Handles App auth, file create/update |
+| `src/server.js` | Main entry point. Routes, auth, allowlist checks, multi-repo endpoints |
+| `src/github.js` | GitHub API wrapper. App auth, file CRUD, tree listing |
 | `docs/API.md` | Full API documentation with examples |
+| `docs/MULTI_REPO_GUIDE.md` | Cross-repo patterns, batch operations, permissions guide |
+| `docs/chatgpt-tool-schema.json` | OpenAPI schema for ChatGPT/agent integrations |
 
 ## API Endpoints
 
@@ -44,7 +58,11 @@ repo-bridge/
 |--------|------|---------------|-------------|
 | GET | `/` | No | Service info |
 | GET | `/health` | No | Health check |
-| POST | `/apply` | Yes* | Create/update file |
+| POST | `/read` | Yes* | Read a file from any repo |
+| POST | `/list` | Yes* | List directory contents |
+| POST | `/batch/read` | Yes* | Batch read up to 10 files across repos |
+| POST | `/copy` | Yes* | Copy file between repos |
+| POST | `/apply` | Yes* | Create/update file(s) |
 | POST | `/github/dryrun` | Yes* | Preview changes |
 
 *Auth required only if `API_AUTH_TOKEN` is set
@@ -59,19 +77,30 @@ Environment variables (set in Render or `.env`):
 | `GITHUB_PRIVATE_KEY` | Yes | App private key (PEM) |
 | `GITHUB_INSTALLATION_ID` | No | Default installation ID |
 | `API_AUTH_TOKEN` | No | Bearer token for API auth |
-| `ALLOWED_REPOS` | No | Comma-separated repo allowlist |
-| `ALLOWED_PATHS` | No | Comma-separated path allowlist |
+| `ALLOWED_REPOS` | No | Comma-separated repo allowlist (supports wildcards) |
+| `ALLOWED_PATHS` | No | Comma-separated path allowlist (supports wildcards) |
+| `READ_ONLY_REPOS` | No | Comma-separated read-only repos |
 | `DEFAULT_BRANCH` | No | Default branch (defaults to `main`) |
 | `PORT` | No | Server port (defaults to 3000) |
 
 ## Current Status
 
-- **Version:** 0.1.0
+- **Version:** 0.3.0
+- **Schema Version:** 0.3.0 (OpenAPI 3.1.0)
 - **Node.js:** >=18
 - **Deployment Target:** Render
 - **Branch:** main
+- **Multi-repo:** Fully supported via /batch/read, /copy, /list
 
 ## Recent Changes
+
+- Added `/copy` endpoint for cross-repo file transfer
+- Added `/batch/read` endpoint for multi-repo simultaneous reads
+- Added `/list` to OpenAPI schema (was missing)
+- Lifted single-file restriction on `changes[]` array
+- Added multi-file write support to `/apply`
+- Created MULTI_REPO_GUIDE.md documentation
+- Updated schema to v0.3.0 with all endpoints
 
 See `docs/CHANGELOG_AI.md` for AI-made changes.
 See git log for all changes.

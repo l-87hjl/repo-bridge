@@ -28,7 +28,7 @@ const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
   .filter(Boolean);
 
 app.get('/', (req, res) => {
-  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/github/dryrun'] });
+  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batch/read', '/github/dryrun'] });
 });
 
 app.get('/health', (req, res) => {
@@ -130,19 +130,30 @@ function normalizeApplyBody(body) {
   const branch = b.branch || DEFAULT_BRANCH;
 
   if (Array.isArray(b.changes) && b.changes.length > 0) {
-    if (b.changes.length !== 1) {
-      return { error: 'For now, changes[] must contain exactly 1 file.' };
+    if (b.changes.length === 1) {
+      // Single-file shorthand: flatten into top-level fields
+      const c0 = b.changes[0] || {};
+      return {
+        owner: b.owner,
+        repo: b.repo,
+        branch,
+        path: c0.path,
+        content: c0.content,
+        message: b.message,
+        installationId: b.installationId,
+        dryRun: b.dryRun,
+      };
     }
-    const c0 = b.changes[0] || {};
+    // Multi-file: return all changes for batch processing
     return {
       owner: b.owner,
       repo: b.repo,
       branch,
-      path: c0.path,
-      content: c0.content,
+      changes: b.changes,
       message: b.message,
       installationId: b.installationId,
       dryRun: b.dryRun,
+      multi: true,
     };
   }
 
@@ -189,7 +200,45 @@ app.post('/apply', requireAuth, async (req, res) => {
     const b = normalizeApplyBody(req.body);
     if (b.error) return badRequest(res, b.error);
 
-    const { owner, repo, branch, path, content, message, installationId, dryRun } = b;
+    const { owner, repo, branch, message, installationId, dryRun } = b;
+
+    // Multi-file apply
+    if (b.multi && Array.isArray(b.changes)) {
+      if (!owner || !repo || !message) {
+        return badRequest(res, 'Required for multi-file: owner, repo, message, changes[{path, content}]');
+      }
+      if (!isRepoAllowed(owner, repo)) {
+        return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+      }
+      if (isRepoReadOnly(owner, repo)) {
+        return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Repository ${owner}/${repo} is configured as read-only` });
+      }
+      for (const c of b.changes) {
+        if (!c.path || typeof c.content !== 'string') {
+          return badRequest(res, 'Each change must have path and content(string)');
+        }
+        if (!isPathAllowed(c.path)) {
+          return forbidden(res, `Path ${c.path} is not in the allowlist`);
+        }
+      }
+
+      if (dryRun) {
+        const { dryRunOneFile } = require('./github');
+        const results = b.changes.map(c => dryRunOneFile({ owner, repo, branch, path: c.path, content: c.content, message }));
+        return res.json({ ok: true, wouldApply: results.map(r => r.wouldApply) });
+      }
+
+      const { applyOneFile } = require('./github');
+      const results = [];
+      for (const c of b.changes) {
+        const result = await applyOneFile({ owner, repo, branch, path: c.path, content: c.content, message, installationId });
+        results.push(result);
+      }
+      return res.json({ ok: true, results });
+    }
+
+    // Single-file apply
+    const { path, content } = b;
 
     if (!owner || !repo || !path || typeof content !== 'string' || !message) {
       return badRequest(res, 'Required: owner, repo, path, content(string), message. Optional: branch (defaults to main)');
@@ -308,6 +357,161 @@ app.post('/list', requireAuth, async (req, res) => {
     }
     console.error(e);
     return res.status(500).json({ ok: false, error: 'ListFailed', message: e?.message || String(e) });
+  }
+});
+
+/**
+ * POST /copy - Copy a file from one repo to another in a single call.
+ * Reads from source repo, writes to destination repo.
+ */
+app.post('/copy', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+
+    // Parse source
+    let srcOwner = b.srcOwner || b.sourceOwner;
+    let srcRepo = b.srcRepo || b.sourceRepo;
+    if (!srcOwner && typeof (b.source || b.from) === 'string' && (b.source || b.from).includes('/')) {
+      const [o, r] = (b.source || b.from).split('/');
+      srcOwner = o;
+      srcRepo = r;
+    }
+    const srcBranch = b.srcBranch || b.sourceBranch || DEFAULT_BRANCH;
+    const srcPath = b.srcPath || b.sourcePath;
+
+    // Parse destination
+    let destOwner = b.destOwner || b.destinationOwner;
+    let destRepo = b.destRepo || b.destinationRepo;
+    if (!destOwner && typeof (b.destination || b.to) === 'string' && (b.destination || b.to).includes('/')) {
+      const [o, r] = (b.destination || b.to).split('/');
+      destOwner = o;
+      destRepo = r;
+    }
+    const destBranch = b.destBranch || b.destinationBranch || DEFAULT_BRANCH;
+    const destPath = b.destPath || b.destinationPath || srcPath;
+    const message = b.message || `Copy ${srcPath} from ${srcOwner}/${srcRepo} to ${destOwner}/${destRepo}`;
+    const installationId = b.installationId;
+
+    // Validate
+    if (!srcOwner || !srcRepo || !srcPath) {
+      return badRequest(res, 'Required: source (owner/repo), srcPath. Use source or srcOwner+srcRepo format.');
+    }
+    if (!destOwner || !destRepo) {
+      return badRequest(res, 'Required: destination (owner/repo). Use destination or destOwner+destRepo format.');
+    }
+
+    // Check allowlists
+    if (!isRepoAllowed(srcOwner, srcRepo)) {
+      return forbidden(res, `Source repository ${srcOwner}/${srcRepo} is not in the allowlist`);
+    }
+    if (!isRepoAllowed(destOwner, destRepo)) {
+      return forbidden(res, `Destination repository ${destOwner}/${destRepo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(destPath)) {
+      return forbidden(res, `Destination path ${destPath} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(destOwner, destRepo)) {
+      return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Destination repository ${destOwner}/${destRepo} is configured as read-only` });
+    }
+
+    const { readOneFile, applyOneFile } = require('./github');
+
+    // Read from source
+    const readResult = await readOneFile({ owner: srcOwner, repo: srcRepo, branch: srcBranch, path: srcPath, installationId });
+
+    // Write to destination
+    const applyResult = await applyOneFile({
+      owner: destOwner,
+      repo: destRepo,
+      branch: destBranch,
+      path: destPath,
+      content: readResult.content,
+      message,
+      installationId,
+    });
+
+    return res.json({
+      ok: true,
+      copied: true,
+      source: { owner: srcOwner, repo: srcRepo, branch: srcBranch, path: srcPath, sha: readResult.sha },
+      destination: { ...applyResult },
+    });
+  } catch (e) {
+    console.error(e);
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Source file not found' });
+    }
+    return res.status(500).json({ ok: false, error: 'CopyFailed', message: e?.message || String(e) });
+  }
+});
+
+/**
+ * POST /batch/read - Read multiple files from one or more repos in a single call.
+ * Supports cross-repo reads for multi-repo analysis.
+ */
+app.post('/batch/read', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const files = b.files;
+
+    if (!Array.isArray(files) || files.length === 0) {
+      return badRequest(res, 'Required: files[] array with objects containing repo (owner/name) and path');
+    }
+
+    if (files.length > 10) {
+      return badRequest(res, 'Maximum 10 files per batch read request');
+    }
+
+    // Validate all entries first
+    const parsed = [];
+    for (const f of files) {
+      let owner = f.owner;
+      let repo = f.repo;
+      if (!owner && typeof repo === 'string' && repo.includes('/')) {
+        const [o, r] = repo.split('/');
+        owner = o;
+        repo = r;
+      }
+      const branch = f.branch || DEFAULT_BRANCH;
+      const path = f.path;
+
+      if (!owner || !repo || !path) {
+        return badRequest(res, `Each file must have repo (owner/name) and path. Got: ${JSON.stringify(f)}`);
+      }
+      if (!isRepoAllowed(owner, repo)) {
+        return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+      }
+      if (!isPathAllowed(path)) {
+        return forbidden(res, `Path ${path} is not in the allowlist`);
+      }
+      parsed.push({ owner, repo, branch, path, installationId: f.installationId || b.installationId });
+    }
+
+    const { readOneFile } = require('./github');
+
+    // Read all files concurrently
+    const results = await Promise.allSettled(
+      parsed.map(p => readOneFile(p))
+    );
+
+    const output = results.map((r, i) => {
+      if (r.status === 'fulfilled') {
+        return r.value;
+      }
+      return {
+        ok: false,
+        owner: parsed[i].owner,
+        repo: parsed[i].repo,
+        path: parsed[i].path,
+        error: r.reason?.message || 'ReadFailed',
+      };
+    });
+
+    return res.json({ ok: true, files: output });
+  } catch (e) {
+    console.error(e);
+    return res.status(500).json({ ok: false, error: 'BatchReadFailed', message: e?.message || String(e) });
   }
 });
 
