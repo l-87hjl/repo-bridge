@@ -2,7 +2,7 @@
 
 This document summarizes the current state of the repo-bridge repository. AI agents should update this file when the repository structure changes significantly.
 
-**Last Updated:** 2026-02-05
+**Last Updated:** 2026-02-05 (v1.2.1 schema migration)
 
 ## Purpose
 
@@ -60,10 +60,12 @@ repo-bridge/
 | GET | `/health` | No | Health check |
 | POST | `/read` | Yes* | Read a file from any repo |
 | POST | `/list` | Yes* | List directory contents |
-| POST | `/batch/read` | Yes* | Batch read up to 10 files across repos |
+| POST | `/batchRead` | Yes* | Batch read up to 10 files across repos |
 | POST | `/copy` | Yes* | Copy file between repos |
-| POST | `/apply` | Yes* | Create/update file(s) |
-| POST | `/github/dryrun` | Yes* | Preview changes |
+| POST | `/apply` | Yes* | Create/update file(s) (oneOf: path+content or changes[]) |
+| POST | `/dryRun` | Yes* | Preview changes |
+| POST | `/batch/read` | Yes* | Alias for /batchRead (backward compat) |
+| POST | `/github/dryrun` | Yes* | Alias for /dryRun (backward compat) |
 
 *Auth required only if `API_AUTH_TOKEN` is set
 
@@ -86,21 +88,20 @@ Environment variables (set in Render or `.env`):
 ## Current Status
 
 - **Version:** 0.3.0
-- **Schema Version:** 0.3.0 (OpenAPI 3.1.0)
+- **Schema Version:** 1.2.1 (OpenAPI 3.1.0)
 - **Node.js:** >=18
 - **Deployment Target:** Render
 - **Branch:** main
-- **Multi-repo:** Fully supported via /batch/read, /copy, /list
+- **Multi-repo:** Fully supported via /batchRead, /copy, /list, /dryRun
 
 ## Recent Changes
 
-- Added `/copy` endpoint for cross-repo file transfer
-- Added `/batch/read` endpoint for multi-repo simultaneous reads
-- Added `/list` to OpenAPI schema (was missing)
-- Lifted single-file restriction on `changes[]` array
-- Added multi-file write support to `/apply`
-- Created MULTI_REPO_GUIDE.md documentation
-- Updated schema to v0.3.0 with all endpoints
+- Migrated to v1.2.1 schema (ChatGPT-compatible flat format)
+- Added `/batchRead` route (camelCase canonical, `/batch/read` kept as alias)
+- Added `/dryRun` route (camelCase canonical, `/github/dryrun` kept as alias)
+- Enforced oneOf in `/apply`: path+content XOR changes[], not both
+- Updated `/copy` to accept v1.2.1 field names (sourceRepo/sourcePath/destinationRepo/destinationPath)
+- All branches default internally when omitted
 
 See `docs/CHANGELOG_AI.md` for AI-made changes.
 See git log for all changes.

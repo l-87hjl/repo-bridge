@@ -83,10 +83,10 @@ The server will start on `http://localhost:3000`.
 | GET | `/health` | Health check with timestamp |
 | POST | `/read` | Read a file from any accessible repo |
 | POST | `/list` | List directory contents of any repo |
-| POST | `/batch/read` | Read up to 10 files from multiple repos |
+| POST | `/batchRead` | Read up to 10 files from multiple repos |
 | POST | `/copy` | Copy a file between repositories |
 | POST | `/apply` | Create or update file(s) in a repo |
-| POST | `/github/dryrun` | Preview changes without committing |
+| POST | `/dryRun` | Preview changes without committing |
 
 See [docs/API.md](docs/API.md) for detailed API documentation.
 

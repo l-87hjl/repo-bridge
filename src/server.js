@@ -28,7 +28,7 @@ const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
   .filter(Boolean);
 
 app.get('/', (req, res) => {
-  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batch/read', '/github/dryrun'] });
+  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun'] });
 });
 
 app.get('/health', (req, res) => {
@@ -129,7 +129,15 @@ function normalizeApplyBody(body) {
   // Default branch to 'main' if not specified
   const branch = b.branch || DEFAULT_BRANCH;
 
-  if (Array.isArray(b.changes) && b.changes.length > 0) {
+  const hasPathContent = b.path && typeof b.content === 'string';
+  const hasChanges = Array.isArray(b.changes) && b.changes.length > 0;
+
+  // Enforce oneOf: reject if both path+content and changes[] are provided
+  if (hasPathContent && hasChanges) {
+    return { error: 'Provide either path+content (single file) or changes[] (multi-file), not both.' };
+  }
+
+  if (hasChanges) {
     if (b.changes.length === 1) {
       // Single-file shorthand: flatten into top-level fields
       const c0 = b.changes[0] || {};
@@ -169,7 +177,8 @@ function normalizeApplyBody(body) {
   };
 }
 
-app.post('/github/dryrun', requireAuth, (req, res) => {
+// Shared handler for dry-run preview
+function handleDryRun(req, res) {
   try {
     const b = normalizeApplyBody(req.body);
     if (b.error) return badRequest(res, b.error);
@@ -193,7 +202,10 @@ app.post('/github/dryrun', requireAuth, (req, res) => {
   } catch (e) {
     return res.status(500).json({ ok: false, error: 'ServerError', message: e?.message || String(e) });
   }
-});
+}
+
+app.post('/dryRun', requireAuth, handleDryRun);
+app.post('/github/dryrun', requireAuth, handleDryRun);
 
 app.post('/apply', requireAuth, async (req, res) => {
   try {
@@ -363,27 +375,34 @@ app.post('/list', requireAuth, async (req, res) => {
 /**
  * POST /copy - Copy a file from one repo to another in a single call.
  * Reads from source repo, writes to destination repo.
+ *
+ * Accepts field names in multiple formats for compatibility:
+ *   v1.2.1 schema: sourceRepo, sourcePath, sourceBranch, destinationRepo, destinationPath, destinationBranch
+ *   v1.2.0 schema: source (owner/repo), srcPath, srcBranch, destination (owner/repo), destPath, destBranch
+ *   Verbose:       srcOwner+srcRepo, destOwner+destRepo
  */
 app.post('/copy', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
 
-    // Parse source
+    // Parse source — accept sourceRepo (v1.2.1), source (v1.2.0), from, or srcOwner+srcRepo
     let srcOwner = b.srcOwner || b.sourceOwner;
     let srcRepo = b.srcRepo || b.sourceRepo;
-    if (!srcOwner && typeof (b.source || b.from) === 'string' && (b.source || b.from).includes('/')) {
-      const [o, r] = (b.source || b.from).split('/');
+    const sourceRepoField = b.sourceRepo || b.source || b.from;
+    if (!srcOwner && typeof sourceRepoField === 'string' && sourceRepoField.includes('/')) {
+      const [o, r] = sourceRepoField.split('/');
       srcOwner = o;
       srcRepo = r;
     }
     const srcBranch = b.srcBranch || b.sourceBranch || DEFAULT_BRANCH;
     const srcPath = b.srcPath || b.sourcePath;
 
-    // Parse destination
+    // Parse destination — accept destinationRepo (v1.2.1), destination (v1.2.0), to, or destOwner+destRepo
     let destOwner = b.destOwner || b.destinationOwner;
     let destRepo = b.destRepo || b.destinationRepo;
-    if (!destOwner && typeof (b.destination || b.to) === 'string' && (b.destination || b.to).includes('/')) {
-      const [o, r] = (b.destination || b.to).split('/');
+    const destRepoField = b.destinationRepo || b.destination || b.to;
+    if (!destOwner && typeof destRepoField === 'string' && destRepoField.includes('/')) {
+      const [o, r] = destRepoField.split('/');
       destOwner = o;
       destRepo = r;
     }
@@ -394,10 +413,10 @@ app.post('/copy', requireAuth, async (req, res) => {
 
     // Validate
     if (!srcOwner || !srcRepo || !srcPath) {
-      return badRequest(res, 'Required: source (owner/repo), srcPath. Use source or srcOwner+srcRepo format.');
+      return badRequest(res, 'Required: sourceRepo (owner/repo), sourcePath. Accepts sourceRepo or source or srcOwner+srcRepo.');
     }
     if (!destOwner || !destRepo) {
-      return badRequest(res, 'Required: destination (owner/repo). Use destination or destOwner+destRepo format.');
+      return badRequest(res, 'Required: destinationRepo (owner/repo). Accepts destinationRepo or destination or destOwner+destRepo.');
     }
 
     // Check allowlists
@@ -447,10 +466,11 @@ app.post('/copy', requireAuth, async (req, res) => {
 });
 
 /**
- * POST /batch/read - Read multiple files from one or more repos in a single call.
+ * POST /batchRead and /batch/read - Read multiple files from one or more repos in a single call.
  * Supports cross-repo reads for multi-repo analysis.
+ * /batchRead is the canonical route (v1.2.1 schema), /batch/read is kept for backward compatibility.
  */
-app.post('/batch/read', requireAuth, async (req, res) => {
+async function handleBatchRead(req, res) {
   try {
     const b = req.body || {};
     const files = b.files;
@@ -513,7 +533,10 @@ app.post('/batch/read', requireAuth, async (req, res) => {
     console.error(e);
     return res.status(500).json({ ok: false, error: 'BatchReadFailed', message: e?.message || String(e) });
   }
-});
+}
+
+app.post('/batchRead', requireAuth, handleBatchRead);
+app.post('/batch/read', requireAuth, handleBatchRead);
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
 

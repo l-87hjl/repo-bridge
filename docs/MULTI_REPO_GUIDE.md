@@ -12,7 +12,7 @@ repo-bridge is **not** locked to a single repository. Every API call accepts an 
 |----------|---------|-----------------|
 | `POST /list` | List directory contents | Explore structure across repos |
 | `POST /read` | Read one file | Inspect any repo's files |
-| `POST /batch/read` | Read up to 10 files at once | Compare files across repos simultaneously |
+| `POST /batchRead` | Read up to 10 files at once | Compare files across repos simultaneously |
 | `POST /copy` | Copy a file between repos | Transfer files in a single call |
 | `POST /apply` | Write file(s) to a repo | Multi-file writes with `changes[]` |
 
@@ -43,7 +43,7 @@ POST /list
 Read entry points from all three repos in one call:
 
 ```json
-POST /batch/read
+POST /batchRead
 {
   "files": [
     { "repo": "myorg/agent-boot", "path": "AGENT_ENTRY.md" },
@@ -56,7 +56,7 @@ POST /batch/read
 Compare configurations:
 
 ```json
-POST /batch/read
+POST /batchRead
 {
   "files": [
     { "repo": "myorg/agent-boot", "path": "contract/AGENT_RULES.md" },
@@ -74,10 +74,10 @@ Copy a template from boot repo to workspace:
 ```json
 POST /copy
 {
-  "source": "myorg/agent-boot",
-  "srcPath": "templates/STATE.template.json",
-  "destination": "myorg/agent-workspace",
-  "destPath": "agent/STATE.json",
+  "sourceRepo": "myorg/agent-boot",
+  "sourcePath": "templates/STATE.template.json",
+  "destinationRepo": "myorg/agent-workspace",
+  "destinationPath": "agent/STATE.json",
   "message": "Initialize workspace state from boot template"
 }
 ```
@@ -133,9 +133,9 @@ To understand this architecture, the agent should:
 ### Recommended Boot Sequence for Multi-Repo Agents
 
 ```
-Step 1: /batch/read → Read AGENT_ENTRY.md from all three repos
+Step 1: /batchRead  → Read AGENT_ENTRY.md from all three repos
 Step 2: /list       → List workspace repo to find current state
-Step 3: /batch/read → Read STATE.json, TODO.json, CHANGELOG.md from workspace
+Step 3: /batchRead  → Read STATE.json, TODO.json, CHANGELOG.md from workspace
 Step 4: /read       → Read specific rules from boot repo as needed
 Step 5: (begin work using workspace as read/write target)
 ```
@@ -160,7 +160,7 @@ READ_ONLY_REPOS=myorg/agent-boot,myorg/ai-agent-contract,myorg/repo-bridge
 
 ### Access Matrix
 
-| Repository | /list | /read | /batch/read | /copy (as source) | /copy (as dest) | /apply |
+| Repository | /list | /read | /batchRead | /copy (as source) | /copy (as dest) | /apply |
 |-----------|-------|-------|-------------|-------------------|-----------------|--------|
 | agent-boot (read-only) | Yes | Yes | Yes | Yes | No | No |
 | ai-agent-contract (read-only) | Yes | Yes | Yes | Yes | No | No |

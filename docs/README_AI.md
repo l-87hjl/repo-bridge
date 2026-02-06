@@ -12,10 +12,10 @@ repo-bridge is a multi-repo microservice that lets you read, write, list, copy, 
 |----------|--------|---------|
 | `/read` | POST | Read a file from any accessible repo |
 | `/list` | POST | List directory contents of any repo |
-| `/batch/read` | POST | Read up to 10 files from any combination of repos |
+| `/batchRead` | POST | Read up to 10 files from any combination of repos |
 | `/copy` | POST | Copy a file from one repo to another |
 | `/apply` | POST | Create/update file(s) in a repo |
-| `/github/dryrun` | POST | Preview a write without committing |
+| `/dryRun` | POST | Preview a write without committing |
 | `/health` | GET | Health check |
 
 ## How to Use repo-bridge
@@ -52,7 +52,7 @@ POST /list
 Read files from multiple repos simultaneously:
 
 ```json
-POST /batch/read
+POST /batchRead
 {
   "files": [
     { "repo": "myorg/agent-boot", "path": "AGENT_ENTRY.md" },
@@ -67,10 +67,10 @@ POST /batch/read
 ```json
 POST /copy
 {
-  "source": "myorg/agent-boot",
-  "srcPath": "templates/STATE.template.json",
-  "destination": "myorg/agent-workspace",
-  "destPath": "agent/STATE.json",
+  "sourceRepo": "myorg/agent-boot",
+  "sourcePath": "templates/STATE.template.json",
+  "destinationRepo": "myorg/agent-workspace",
+  "destinationPath": "agent/STATE.json",
   "message": "Initialize state from template"
 }
 ```
