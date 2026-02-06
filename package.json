@@ -1,6 +1,6 @@
 {
   "name": "repo-bridge",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "description": "Multi-repo bridge for AI agents to GitHub. Read, write, list, copy, and batch-read files across repositories.",
   "main": "src/server.js",

@@ -2,6 +2,7 @@
 
 const express = require('express');
 const helmet = require('helmet');
+const log = require('./logger');
 
 const app = express();
 app.set('trust proxy', 1);
@@ -27,12 +28,72 @@ const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
 
-app.get('/', (req, res) => {
-  res.json({ service: 'repo-bridge', status: 'running', endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun'] });
+// ─── Request logging middleware ───────────────────────────────────────────────
+app.use((req, res, next) => {
+  const requestId = log.generateRequestId();
+  req.requestId = requestId;
+  req.startTime = Date.now();
+
+  // Attach requestId to response headers for client-side correlation
+  res.setHeader('X-Request-Id', requestId);
+
+  // Log when response finishes
+  res.on('finish', () => {
+    const durationMs = Date.now() - req.startTime;
+    const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+    log[level]('Request completed', {
+      requestId,
+      method: req.method,
+      url: req.originalUrl,
+      statusCode: res.statusCode,
+      durationMs,
+      contentLength: res.getHeader('content-length') || 0,
+    });
+  });
+
+  next();
 });
 
-app.get('/health', (req, res) => {
-  res.json({ ok: true, service: 'repo-bridge', time: new Date().toISOString() });
+app.get('/', (req, res) => {
+  res.json({
+    service: 'repo-bridge',
+    status: 'running',
+    version: '0.4.0',
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure'],
+  });
+});
+
+app.get('/health', async (req, res) => {
+  const health = {
+    ok: true,
+    service: 'repo-bridge',
+    version: '0.4.0',
+    time: new Date().toISOString(),
+    uptime: process.uptime(),
+  };
+
+  // Optionally verify GitHub connectivity
+  if (process.env.GITHUB_APP_ID && process.env.GITHUB_PRIVATE_KEY) {
+    try {
+      const { getInstallationOctokit } = require('./github');
+      const octokit = await getInstallationOctokit();
+      const { data } = await octokit.rest.rateLimit.get();
+      health.github = {
+        connected: true,
+        rateLimit: {
+          remaining: data.rate.remaining,
+          limit: data.rate.limit,
+          resetsAt: new Date(data.rate.reset * 1000).toISOString(),
+        },
+      };
+    } catch (e) {
+      health.github = { connected: false, error: e.message };
+      health.ok = false;
+    }
+  }
+
+  const statusCode = health.ok ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 function badRequest(res, message) {
@@ -48,11 +109,41 @@ function forbidden(res, message) {
 }
 
 /**
+ * Build a structured error response with diagnostic context.
+ */
+function errorResponse(res, statusCode, errorType, err, context = {}) {
+  const body = {
+    ok: false,
+    error: errorType,
+    message: err?.message || String(err),
+    requestId: context.requestId || null,
+  };
+  // Include diagnostic hints for common failures
+  if (err?.status === 401 || err?.status === 403) {
+    body.hint = 'Check that the GitHub App is installed on the target repository and has the required permissions.';
+  }
+  if (err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || (err?.message || '').toLowerCase().includes('clientresponseerror')) {
+    body.hint = 'This is a transient network error. The request was retried automatically but all attempts failed. Try again in a few seconds.';
+    body.transient = true;
+  }
+  if (err?.status === 429) {
+    body.hint = 'GitHub API rate limit exceeded. Wait for the rate limit to reset before retrying.';
+    body.transient = true;
+  }
+  log.error(`${errorType} response`, {
+    requestId: context.requestId,
+    statusCode,
+    ...log.serializeError(err),
+    ...context,
+  });
+  return res.status(statusCode).json(body);
+}
+
+/**
  * Auth middleware: requires Bearer token if API_AUTH_TOKEN is set.
  */
 function requireAuth(req, res, next) {
   if (!API_AUTH_TOKEN) {
-    // No token configured, allow all requests
     return next();
   }
 
@@ -61,7 +152,7 @@ function requireAuth(req, res, next) {
     return unauthorized(res, 'Missing or invalid Authorization header. Use: Bearer <token>');
   }
 
-  const token = authHeader.slice(7); // Remove 'Bearer ' prefix
+  const token = authHeader.slice(7);
   if (token !== API_AUTH_TOKEN) {
     return unauthorized(res, 'Invalid auth token');
   }
@@ -71,14 +162,12 @@ function requireAuth(req, res, next) {
 
 /**
  * Check if a repo is in the allowlist.
- * Returns true if allowed, false otherwise.
  */
 function isRepoAllowed(owner, repo) {
-  if (!ALLOWED_REPOS) return true; // No allowlist = allow all
+  if (!ALLOWED_REPOS) return true;
   const fullName = `${owner}/${repo}`.toLowerCase();
   return ALLOWED_REPOS.some(pattern => {
     if (pattern.includes('*')) {
-      // Simple wildcard: owner/* matches any repo from that owner
       const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
       return regex.test(fullName);
     }
@@ -88,24 +177,20 @@ function isRepoAllowed(owner, repo) {
 
 /**
  * Check if a path is in the allowlist.
- * Returns true if allowed, false otherwise.
  */
 function isPathAllowed(filePath) {
-  if (!ALLOWED_PATHS) return true; // No allowlist = allow all
+  if (!ALLOWED_PATHS) return true;
   return ALLOWED_PATHS.some(pattern => {
     if (pattern.includes('*')) {
-      // Simple wildcard matching
       const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
       return regex.test(filePath);
     }
-    // Exact match or prefix match (for directories)
     return filePath === pattern || filePath.startsWith(pattern.endsWith('/') ? pattern : pattern + '/');
   });
 }
 
 /**
  * Check if a repo is configured as read-only.
- * Returns true if the repo is read-only (writes blocked), false otherwise.
  */
 function isRepoReadOnly(owner, repo) {
   if (READ_ONLY_REPOS.length === 0) return false;
@@ -113,67 +198,58 @@ function isRepoReadOnly(owner, repo) {
   return READ_ONLY_REPOS.includes(fullName);
 }
 
+/**
+ * Parse owner/repo from flexible input formats.
+ */
+function parseOwnerRepo(body) {
+  let owner = body.owner;
+  let repo = body.repo;
+  if (!owner && typeof repo === 'string' && repo.includes('/')) {
+    const [o, r] = repo.split('/');
+    owner = o;
+    repo = r;
+  }
+  return { owner, repo };
+}
+
 function normalizeApplyBody(body) {
-  // Accept two shapes:
-  // A) { owner, repo, branch, path, content, message, installationId? }
-  // B) { owner, repo, branch, message, changes:[{path, content}], installationId?, dryRun? }
   const b = body || {};
 
-  // Allow repo like "owner/name" too
   if (!b.owner && typeof b.repo === 'string' && b.repo.includes('/')) {
     const [o, r] = b.repo.split('/');
     b.owner = o;
     b.repo = r;
   }
 
-  // Default branch to 'main' if not specified
   const branch = b.branch || DEFAULT_BRANCH;
 
   const hasPathContent = b.path && typeof b.content === 'string';
   const hasChanges = Array.isArray(b.changes) && b.changes.length > 0;
 
-  // Enforce oneOf: reject if both path+content and changes[] are provided
   if (hasPathContent && hasChanges) {
     return { error: 'Provide either path+content (single file) or changes[] (multi-file), not both.' };
   }
 
   if (hasChanges) {
     if (b.changes.length === 1) {
-      // Single-file shorthand: flatten into top-level fields
       const c0 = b.changes[0] || {};
       return {
-        owner: b.owner,
-        repo: b.repo,
-        branch,
-        path: c0.path,
-        content: c0.content,
-        message: b.message,
-        installationId: b.installationId,
-        dryRun: b.dryRun,
+        owner: b.owner, repo: b.repo, branch,
+        path: c0.path, content: c0.content,
+        message: b.message, installationId: b.installationId, dryRun: b.dryRun,
       };
     }
-    // Multi-file: return all changes for batch processing
     return {
-      owner: b.owner,
-      repo: b.repo,
-      branch,
-      changes: b.changes,
-      message: b.message,
-      installationId: b.installationId,
-      dryRun: b.dryRun,
-      multi: true,
+      owner: b.owner, repo: b.repo, branch,
+      changes: b.changes, message: b.message,
+      installationId: b.installationId, dryRun: b.dryRun, multi: true,
     };
   }
 
   return {
-    owner: b.owner,
-    repo: b.repo,
-    branch,
-    path: b.path,
-    content: b.content,
-    message: b.message,
-    installationId: b.installationId,
-    dryRun: b.dryRun,
+    owner: b.owner, repo: b.repo, branch,
+    path: b.path, content: b.content,
+    message: b.message, installationId: b.installationId, dryRun: b.dryRun,
   };
 }
 
@@ -188,7 +264,6 @@ function handleDryRun(req, res) {
       return badRequest(res, 'Required: owner, repo, path, content(string), message. Optional: branch (defaults to main)');
     }
 
-    // Check allowlists
     if (!isRepoAllowed(owner, repo)) {
       return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
     }
@@ -196,11 +271,10 @@ function handleDryRun(req, res) {
       return forbidden(res, `Path ${path} is not in the allowlist`);
     }
 
-    // dryRunOneFile never touches GitHub - it only returns what would be applied
     const { dryRunOneFile } = require('./github');
     return res.json(dryRunOneFile({ owner, repo, branch, path, content, message }));
   } catch (e) {
-    return res.status(500).json({ ok: false, error: 'ServerError', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'ServerError', e, { requestId: req.requestId });
   }
 }
 
@@ -256,7 +330,6 @@ app.post('/apply', requireAuth, async (req, res) => {
       return badRequest(res, 'Required: owner, repo, path, content(string), message. Optional: branch (defaults to main)');
     }
 
-    // Check allowlists
     if (!isRepoAllowed(owner, repo)) {
       return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
     }
@@ -264,7 +337,6 @@ app.post('/apply', requireAuth, async (req, res) => {
       return forbidden(res, `Path ${path} is not in the allowlist`);
     }
 
-    // Check if repo is read-only (blocks writes via /apply)
     if (isRepoReadOnly(owner, repo)) {
       return res.status(403).json({
         ok: false,
@@ -274,7 +346,6 @@ app.post('/apply', requireAuth, async (req, res) => {
     }
 
     if (dryRun) {
-      // dryRunOneFile never touches GitHub - it only returns what would be applied
       const { dryRunOneFile } = require('./github');
       return res.json(dryRunOneFile({ owner, repo, branch, path, content, message }));
     }
@@ -283,24 +354,14 @@ app.post('/apply', requireAuth, async (req, res) => {
     const result = await applyOneFile({ owner, repo, branch, path, content, message, installationId });
     return res.json({ ok: true, ...result });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ ok: false, error: 'ApplyFailed', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'ApplyFailed', e, { requestId: req.requestId });
   }
 });
 
 app.post('/read', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
-
-    // Allow repo like "owner/name" too
-    let owner = b.owner;
-    let repo = b.repo;
-    if (!owner && typeof repo === 'string' && repo.includes('/')) {
-      const [o, r] = repo.split('/');
-      owner = o;
-      repo = r;
-    }
-
+    const { owner, repo } = parseOwnerRepo(b);
     const branch = b.branch || DEFAULT_BRANCH;
     const path = b.path;
     const installationId = b.installationId;
@@ -309,7 +370,6 @@ app.post('/read', requireAuth, async (req, res) => {
       return badRequest(res, 'Required: owner, repo, path. Optional: branch (defaults to main)');
     }
 
-    // Check allowlists
     if (!isRepoAllowed(owner, repo)) {
       return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
     }
@@ -323,29 +383,19 @@ app.post('/read', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found' });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found', requestId: req.requestId });
     }
     if (status === 400) {
-      return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e) });
+      return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e), requestId: req.requestId });
     }
-    console.error(e);
-    return res.status(500).json({ ok: false, error: 'ReadFailed', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId });
   }
 });
 
 app.post('/list', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
-
-    // Allow repo like "owner/name" too
-    let owner = b.owner;
-    let repo = b.repo;
-    if (!owner && typeof repo === 'string' && repo.includes('/')) {
-      const [o, r] = repo.split('/');
-      owner = o;
-      repo = r;
-    }
-
+    const { owner, repo } = parseOwnerRepo(b);
     const branch = b.branch || DEFAULT_BRANCH;
     const path = b.path || '';
     const installationId = b.installationId;
@@ -354,7 +404,6 @@ app.post('/list', requireAuth, async (req, res) => {
       return badRequest(res, 'Required: owner, repo. Optional: path (defaults to root), branch (defaults to main)');
     }
 
-    // Check allowlists
     if (!isRepoAllowed(owner, repo)) {
       return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
     }
@@ -365,27 +414,20 @@ app.post('/list', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found' });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found', requestId: req.requestId });
     }
-    console.error(e);
-    return res.status(500).json({ ok: false, error: 'ListFailed', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId });
   }
 });
 
 /**
  * POST /copy - Copy a file from one repo to another in a single call.
- * Reads from source repo, writes to destination repo.
- *
- * Accepts field names in multiple formats for compatibility:
- *   v1.2.1 schema: sourceRepo, sourcePath, sourceBranch, destinationRepo, destinationPath, destinationBranch
- *   v1.2.0 schema: source (owner/repo), srcPath, srcBranch, destination (owner/repo), destPath, destBranch
- *   Verbose:       srcOwner+srcRepo, destOwner+destRepo
  */
 app.post('/copy', requireAuth, async (req, res) => {
   try {
     const b = req.body || {};
 
-    // Parse source — accept sourceRepo (v1.2.1), source (v1.2.0), from, or srcOwner+srcRepo
+    // Parse source
     let srcOwner = b.srcOwner || b.sourceOwner;
     let srcRepo = b.srcRepo || b.sourceRepo;
     const sourceRepoField = b.sourceRepo || b.source || b.from;
@@ -397,7 +439,7 @@ app.post('/copy', requireAuth, async (req, res) => {
     const srcBranch = b.srcBranch || b.sourceBranch || DEFAULT_BRANCH;
     const srcPath = b.srcPath || b.sourcePath;
 
-    // Parse destination — accept destinationRepo (v1.2.1), destination (v1.2.0), to, or destOwner+destRepo
+    // Parse destination
     let destOwner = b.destOwner || b.destinationOwner;
     let destRepo = b.destRepo || b.destinationRepo;
     const destRepoField = b.destinationRepo || b.destination || b.to;
@@ -411,7 +453,6 @@ app.post('/copy', requireAuth, async (req, res) => {
     const message = b.message || `Copy ${srcPath} from ${srcOwner}/${srcRepo} to ${destOwner}/${destRepo}`;
     const installationId = b.installationId;
 
-    // Validate
     if (!srcOwner || !srcRepo || !srcPath) {
       return badRequest(res, 'Required: sourceRepo (owner/repo), sourcePath. Accepts sourceRepo or source or srcOwner+srcRepo.');
     }
@@ -419,7 +460,6 @@ app.post('/copy', requireAuth, async (req, res) => {
       return badRequest(res, 'Required: destinationRepo (owner/repo). Accepts destinationRepo or destination or destOwner+destRepo.');
     }
 
-    // Check allowlists
     if (!isRepoAllowed(srcOwner, srcRepo)) {
       return forbidden(res, `Source repository ${srcOwner}/${srcRepo} is not in the allowlist`);
     }
@@ -435,18 +475,11 @@ app.post('/copy', requireAuth, async (req, res) => {
 
     const { readOneFile, applyOneFile } = require('./github');
 
-    // Read from source
     const readResult = await readOneFile({ owner: srcOwner, repo: srcRepo, branch: srcBranch, path: srcPath, installationId });
 
-    // Write to destination
     const applyResult = await applyOneFile({
-      owner: destOwner,
-      repo: destRepo,
-      branch: destBranch,
-      path: destPath,
-      content: readResult.content,
-      message,
-      installationId,
+      owner: destOwner, repo: destRepo, branch: destBranch,
+      path: destPath, content: readResult.content, message, installationId,
     });
 
     return res.json({
@@ -456,19 +489,16 @@ app.post('/copy', requireAuth, async (req, res) => {
       destination: { ...applyResult },
     });
   } catch (e) {
-    console.error(e);
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Source file not found' });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Source file not found', requestId: req.requestId });
     }
-    return res.status(500).json({ ok: false, error: 'CopyFailed', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'CopyFailed', e, { requestId: req.requestId });
   }
 });
 
 /**
  * POST /batchRead and /batch/read - Read multiple files from one or more repos in a single call.
- * Supports cross-repo reads for multi-repo analysis.
- * /batchRead is the canonical route (v1.2.1 schema), /batch/read is kept for backward compatibility.
  */
 async function handleBatchRead(req, res) {
   try {
@@ -483,16 +513,9 @@ async function handleBatchRead(req, res) {
       return badRequest(res, 'Maximum 10 files per batch read request');
     }
 
-    // Validate all entries first
     const parsed = [];
     for (const f of files) {
-      let owner = f.owner;
-      let repo = f.repo;
-      if (!owner && typeof repo === 'string' && repo.includes('/')) {
-        const [o, r] = repo.split('/');
-        owner = o;
-        repo = r;
-      }
+      const { owner, repo } = parseOwnerRepo(f);
       const branch = f.branch || DEFAULT_BRANCH;
       const path = f.path;
 
@@ -510,7 +533,6 @@ async function handleBatchRead(req, res) {
 
     const { readOneFile } = require('./github');
 
-    // Read all files concurrently
     const results = await Promise.allSettled(
       parsed.map(p => readOneFile(p))
     );
@@ -530,19 +552,415 @@ async function handleBatchRead(req, res) {
 
     return res.json({ ok: true, files: output });
   } catch (e) {
-    console.error(e);
-    return res.status(500).json({ ok: false, error: 'BatchReadFailed', message: e?.message || String(e) });
+    return errorResponse(res, 500, 'BatchReadFailed', e, { requestId: req.requestId });
   }
 }
 
 app.post('/batchRead', requireAuth, handleBatchRead);
 app.post('/batch/read', requireAuth, handleBatchRead);
 
-app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
+// ─── Compare endpoints ───────────────────────────────────────────────────────
 
-app.use((err, req, res, next) => {
-  console.error(err);
-  res.status(500).json({ ok: false, error: 'ServerError' });
+/**
+ * POST /compare - Compare a single file between two repos or branches.
+ *
+ * Returns both file contents plus a line-by-line diff summary.
+ * This solves the "no diff endpoint" limitation documented in MULTI_REPO_GUIDE.md.
+ *
+ * Body:
+ *   source:  { repo: "owner/repo", path: "file.txt", branch?: "main" }
+ *   target:  { repo: "owner/repo", path: "file.txt", branch?: "main" }
+ *   options?: { includeContent?: boolean }  // defaults to true
+ */
+app.post('/compare', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const source = b.source || {};
+    const target = b.target || {};
+    const options = b.options || {};
+    const includeContent = options.includeContent !== false;
+
+    // Parse source
+    const src = parseOwnerRepo(source);
+    const srcBranch = source.branch || DEFAULT_BRANCH;
+    const srcPath = source.path;
+
+    // Parse target
+    const tgt = parseOwnerRepo(target);
+    const tgtBranch = target.branch || DEFAULT_BRANCH;
+    const tgtPath = target.path || srcPath;
+
+    if (!src.owner || !src.repo || !srcPath) {
+      return badRequest(res, 'Required: source.repo (owner/repo), source.path');
+    }
+    if (!tgt.owner || !tgt.repo) {
+      return badRequest(res, 'Required: target.repo (owner/repo). target.path defaults to source.path if omitted.');
+    }
+
+    // Allowlist checks
+    if (!isRepoAllowed(src.owner, src.repo)) {
+      return forbidden(res, `Source repository ${src.owner}/${src.repo} is not in the allowlist`);
+    }
+    if (!isRepoAllowed(tgt.owner, tgt.repo)) {
+      return forbidden(res, `Target repository ${tgt.owner}/${tgt.repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(srcPath)) {
+      return forbidden(res, `Source path ${srcPath} is not in the allowlist`);
+    }
+    if (!isPathAllowed(tgtPath)) {
+      return forbidden(res, `Target path ${tgtPath} is not in the allowlist`);
+    }
+
+    const { readOneFile } = require('./github');
+    const installationId = b.installationId;
+
+    // Read both files concurrently
+    const [srcResult, tgtResult] = await Promise.allSettled([
+      readOneFile({ owner: src.owner, repo: src.repo, branch: srcBranch, path: srcPath, installationId }),
+      readOneFile({ owner: tgt.owner, repo: tgt.repo, branch: tgtBranch, path: tgtPath, installationId }),
+    ]);
+
+    const srcOk = srcResult.status === 'fulfilled';
+    const tgtOk = tgtResult.status === 'fulfilled';
+
+    if (!srcOk && !tgtOk) {
+      return res.status(404).json({
+        ok: false,
+        error: 'BothFilesNotFound',
+        message: 'Neither source nor target file could be read',
+        source: { error: srcResult.reason?.message },
+        target: { error: tgtResult.reason?.message },
+        requestId: req.requestId,
+      });
+    }
+
+    const srcContent = srcOk ? srcResult.value.content : null;
+    const tgtContent = tgtOk ? tgtResult.value.content : null;
+
+    // Compute diff summary
+    const diff = computeLineDiff(srcContent, tgtContent);
+
+    const response = {
+      ok: true,
+      identical: srcContent === tgtContent,
+      source: {
+        repo: `${src.owner}/${src.repo}`,
+        branch: srcBranch,
+        path: srcPath,
+        exists: srcOk,
+        sha: srcOk ? srcResult.value.sha : null,
+        size: srcOk ? srcResult.value.size : null,
+        ...(srcOk && !srcOk ? {} : {}),
+        ...((!srcOk) ? { error: srcResult.reason?.message } : {}),
+      },
+      target: {
+        repo: `${tgt.owner}/${tgt.repo}`,
+        branch: tgtBranch,
+        path: tgtPath,
+        exists: tgtOk,
+        sha: tgtOk ? tgtResult.value.sha : null,
+        size: tgtOk ? tgtResult.value.size : null,
+        ...((!tgtOk) ? { error: tgtResult.reason?.message } : {}),
+      },
+      diff,
+    };
+
+    if (includeContent) {
+      response.source.content = srcContent;
+      response.target.content = tgtContent;
+    }
+
+    return res.json(response);
+  } catch (e) {
+    return errorResponse(res, 500, 'CompareFailed', e, { requestId: req.requestId });
+  }
 });
 
-app.listen(PORT, () => console.log(`repo-bridge listening on ${PORT}`));
+/**
+ * POST /compareStructure - Compare directory structures between two repos.
+ *
+ * Returns which files/dirs exist only in source, only in target, or in both.
+ *
+ * Body:
+ *   source: { repo: "owner/repo", path?: "", branch?: "main" }
+ *   target: { repo: "owner/repo", path?: "", branch?: "main" }
+ */
+app.post('/compareStructure', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const source = b.source || {};
+    const target = b.target || {};
+
+    const src = parseOwnerRepo(source);
+    const srcBranch = source.branch || DEFAULT_BRANCH;
+    const srcPath = source.path || '';
+
+    const tgt = parseOwnerRepo(target);
+    const tgtBranch = target.branch || DEFAULT_BRANCH;
+    const tgtPath = target.path || '';
+
+    if (!src.owner || !src.repo) {
+      return badRequest(res, 'Required: source.repo (owner/repo)');
+    }
+    if (!tgt.owner || !tgt.repo) {
+      return badRequest(res, 'Required: target.repo (owner/repo)');
+    }
+
+    if (!isRepoAllowed(src.owner, src.repo)) {
+      return forbidden(res, `Source repository ${src.owner}/${src.repo} is not in the allowlist`);
+    }
+    if (!isRepoAllowed(tgt.owner, tgt.repo)) {
+      return forbidden(res, `Target repository ${tgt.owner}/${tgt.repo} is not in the allowlist`);
+    }
+
+    const { listTree } = require('./github');
+    const installationId = b.installationId;
+
+    const [srcResult, tgtResult] = await Promise.allSettled([
+      listTree({ owner: src.owner, repo: src.repo, branch: srcBranch, path: srcPath, installationId }),
+      listTree({ owner: tgt.owner, repo: tgt.repo, branch: tgtBranch, path: tgtPath, installationId }),
+    ]);
+
+    const srcOk = srcResult.status === 'fulfilled';
+    const tgtOk = tgtResult.status === 'fulfilled';
+
+    if (!srcOk && !tgtOk) {
+      return res.status(404).json({
+        ok: false,
+        error: 'BothPathsNotFound',
+        message: 'Neither source nor target path could be listed',
+        requestId: req.requestId,
+      });
+    }
+
+    const srcEntries = srcOk ? srcResult.value.entries : [];
+    const tgtEntries = tgtOk ? tgtResult.value.entries : [];
+
+    const srcMap = new Map(srcEntries.map(e => [e.name, e]));
+    const tgtMap = new Map(tgtEntries.map(e => [e.name, e]));
+
+    const onlyInSource = [];
+    const onlyInTarget = [];
+    const inBoth = [];
+    const sizeDifferences = [];
+
+    for (const [name, entry] of srcMap) {
+      if (tgtMap.has(name)) {
+        const tgtEntry = tgtMap.get(name);
+        inBoth.push({ name, type: entry.type, sourceSize: entry.size, targetSize: tgtEntry.size });
+        if (entry.type === 'file' && tgtEntry.type === 'file' && entry.size !== tgtEntry.size) {
+          sizeDifferences.push({ name, sourceSize: entry.size, targetSize: tgtEntry.size });
+        }
+      } else {
+        onlyInSource.push({ name, type: entry.type, size: entry.size });
+      }
+    }
+
+    for (const [name, entry] of tgtMap) {
+      if (!srcMap.has(name)) {
+        onlyInTarget.push({ name, type: entry.type, size: entry.size });
+      }
+    }
+
+    return res.json({
+      ok: true,
+      source: {
+        repo: `${src.owner}/${src.repo}`,
+        branch: srcBranch,
+        path: srcPath || '/',
+        exists: srcOk,
+        entryCount: srcEntries.length,
+        ...((!srcOk) ? { error: srcResult.reason?.message } : {}),
+      },
+      target: {
+        repo: `${tgt.owner}/${tgt.repo}`,
+        branch: tgtBranch,
+        path: tgtPath || '/',
+        exists: tgtOk,
+        entryCount: tgtEntries.length,
+        ...((!tgtOk) ? { error: tgtResult.reason?.message } : {}),
+      },
+      comparison: {
+        identical: onlyInSource.length === 0 && onlyInTarget.length === 0 && sizeDifferences.length === 0,
+        onlyInSource,
+        onlyInTarget,
+        inBoth,
+        sizeDifferences,
+      },
+    });
+  } catch (e) {
+    return errorResponse(res, 500, 'CompareStructureFailed', e, { requestId: req.requestId });
+  }
+});
+
+// ─── Diff utility ─────────────────────────────────────────────────────────────
+
+/**
+ * Compute a line-by-line diff summary between two strings.
+ * Returns added/removed/changed counts and the actual diff lines.
+ * Keeps output bounded: if diff is very large, truncates with a note.
+ */
+function computeLineDiff(sourceContent, targetContent) {
+  if (sourceContent === null && targetContent === null) {
+    return { status: 'both_missing', added: 0, removed: 0, unchanged: 0, lines: [] };
+  }
+  if (sourceContent === null) {
+    const lines = (targetContent || '').split('\n');
+    return { status: 'source_missing', added: lines.length, removed: 0, unchanged: 0, lines: lines.slice(0, 200).map(l => ({ op: 'add', line: l })) };
+  }
+  if (targetContent === null) {
+    const lines = (sourceContent || '').split('\n');
+    return { status: 'target_missing', added: 0, removed: lines.length, unchanged: 0, lines: lines.slice(0, 200).map(l => ({ op: 'remove', line: l })) };
+  }
+  if (sourceContent === targetContent) {
+    return { status: 'identical', added: 0, removed: 0, unchanged: sourceContent.split('\n').length, lines: [] };
+  }
+
+  const srcLines = sourceContent.split('\n');
+  const tgtLines = targetContent.split('\n');
+
+  // Simple LCS-based diff for reasonable-sized files
+  // For very large files, fall back to summary-only
+  const MAX_DIFF_LINES = 500;
+  if (srcLines.length > MAX_DIFF_LINES || tgtLines.length > MAX_DIFF_LINES) {
+    return computeLargeDiffSummary(srcLines, tgtLines);
+  }
+
+  const diffLines = [];
+  let added = 0, removed = 0, unchanged = 0;
+
+  // Simple line-by-line comparison using longest common subsequence approach
+  const lcs = computeLCS(srcLines, tgtLines);
+  let si = 0, ti = 0, li = 0;
+
+  while (si < srcLines.length || ti < tgtLines.length) {
+    if (li < lcs.length && si < srcLines.length && ti < tgtLines.length && srcLines[si] === lcs[li] && tgtLines[ti] === lcs[li]) {
+      unchanged++;
+      si++;
+      ti++;
+      li++;
+    } else if (si < srcLines.length && (li >= lcs.length || srcLines[si] !== lcs[li])) {
+      diffLines.push({ op: 'remove', lineNum: si + 1, line: srcLines[si] });
+      removed++;
+      si++;
+    } else if (ti < tgtLines.length) {
+      diffLines.push({ op: 'add', lineNum: ti + 1, line: tgtLines[ti] });
+      added++;
+      ti++;
+    }
+  }
+
+  return {
+    status: 'different',
+    added,
+    removed,
+    unchanged,
+    lines: diffLines.slice(0, 200),
+    ...(diffLines.length > 200 ? { truncated: true, totalChanges: diffLines.length } : {}),
+  };
+}
+
+/**
+ * For large files, just compute summary stats without full diff lines.
+ */
+function computeLargeDiffSummary(srcLines, tgtLines) {
+  const srcSet = new Set(srcLines);
+  const tgtSet = new Set(tgtLines);
+  let onlyInSource = 0, onlyInTarget = 0, shared = 0;
+
+  for (const line of srcLines) {
+    if (tgtSet.has(line)) shared++;
+    else onlyInSource++;
+  }
+  for (const line of tgtLines) {
+    if (!srcSet.has(line)) onlyInTarget++;
+  }
+
+  return {
+    status: 'different',
+    added: onlyInTarget,
+    removed: onlyInSource,
+    unchanged: shared,
+    lines: [],
+    truncated: true,
+    note: `Files too large for line-by-line diff (${srcLines.length} vs ${tgtLines.length} lines). Summary only.`,
+  };
+}
+
+/**
+ * Compute longest common subsequence of two string arrays.
+ * Uses standard DP approach, bounded for performance.
+ */
+function computeLCS(a, b) {
+  const m = a.length, n = b.length;
+  // For very large inputs, skip full LCS
+  if (m * n > 250000) return [];
+
+  const dp = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+
+  const result = [];
+  let i = m, j = n;
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      result.unshift(a[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
+    }
+  }
+  return result;
+}
+
+// ─── Catch-all and error handler ──────────────────────────────────────────────
+
+app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
+
+app.use((err, req, res, _next) => {
+  log.error('Unhandled server error', {
+    requestId: req.requestId,
+    method: req.method,
+    url: req.originalUrl,
+    ...log.serializeError(err),
+  });
+  res.status(500).json({ ok: false, error: 'ServerError', requestId: req.requestId });
+});
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+
+let server;
+
+function shutdown(signal) {
+  log.info(`Received ${signal}, shutting down gracefully`);
+  if (server) {
+    server.close(() => {
+      log.info('Server closed');
+      process.exit(0);
+    });
+    // Force exit after 10 seconds
+    setTimeout(() => {
+      log.warn('Forced shutdown after timeout');
+      process.exit(1);
+    }, 10000);
+  } else {
+    process.exit(0);
+  }
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
+
+server = app.listen(PORT, () => {
+  log.info('repo-bridge started', { port: PORT, version: '0.4.0' });
+});
