@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge",
-    "version": "1.2.1"
+    "version": "1.3.0"
   },
   "servers": [
     {
@@ -108,6 +108,106 @@
         "responses": {
           "200": {
             "description": "Batch read results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/compare": {
+      "post": {
+        "operationId": "compareFiles",
+        "summary": "Compare a file between two repositories or branches. Returns both contents and a line-by-line diff.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo", "path"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Defaults to source.path if omitted" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "options": {
+                    "type": "object",
+                    "properties": {
+                      "includeContent": { "type": "boolean", "description": "Include full file contents in response. Defaults to true." }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comparison result with diff",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/compareStructure": {
+      "post": {
+        "operationId": "compareStructure",
+        "summary": "Compare directory structures between two repositories. Returns files only in source, only in target, and in both.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "branch": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Structure comparison result",
             "content": {
               "application/json": {
                 "schema": { "type": "object" }
@@ -251,10 +351,10 @@
     "/health": {
       "get": {
         "operationId": "healthCheck",
-        "summary": "Check service status",
+        "summary": "Check service status and GitHub connectivity.",
         "responses": {
           "200": {
-            "description": "Health status",
+            "description": "Health status including GitHub rate limit info",
             "content": {
               "application/json": {
                 "schema": { "type": "object" }

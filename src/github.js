@@ -2,6 +2,17 @@
 
 const { Octokit } = require('@octokit/rest');
 const { createAppAuth } = require('@octokit/auth-app');
+const log = require('./logger');
+
+// --- Configuration ---
+const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 30000;
+const MAX_RETRIES = Number(process.env.MAX_RETRIES) || 3;
+const RETRY_BASE_DELAY_MS = Number(process.env.RETRY_BASE_DELAY_MS) || 1000;
+
+// Cache installation tokens to avoid re-authenticating on every request.
+// Tokens are cached by installationId and expire after 50 minutes (GitHub tokens last 60).
+const tokenCache = new Map();
+const TOKEN_TTL_MS = 50 * 60 * 1000;
 
 function requireEnv(name) {
   const v = process.env[name];
@@ -15,12 +26,71 @@ function normalizePrivateKey(pem) {
 }
 
 /**
+ * Classify whether an error is transient (worth retrying).
+ */
+function isTransientError(err) {
+  if (!err) return false;
+  const status = err.status || err.response?.status;
+  // 429 = rate limited, 500/502/503/504 = server errors
+  if ([429, 500, 502, 503, 504].includes(status)) return true;
+  // Network-level errors (ECONNRESET, ETIMEDOUT, ENOTFOUND, etc.)
+  const code = err.code || '';
+  if (['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN', 'EPIPE', 'UND_ERR_CONNECT_TIMEOUT'].includes(code)) return true;
+  // aiohttp/fetch style: message contains "ClientResponseError" or network keywords
+  const msg = (err.message || '').toLowerCase();
+  if (msg.includes('clientresponseerror') || msg.includes('socket hang up') || msg.includes('network') || msg.includes('timeout') || msg.includes('econnreset')) return true;
+  return false;
+}
+
+/**
+ * Sleep helper for retry backoff.
+ */
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+/**
+ * Execute an async function with retry + exponential backoff for transient errors.
+ * @param {Function} fn - Async function to execute
+ * @param {object} context - Logging context (operation, owner, repo, path)
+ * @returns {Promise<*>} Result of fn()
+ */
+async function withRetry(fn, context = {}) {
+  let lastError;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastError = err;
+      if (attempt < MAX_RETRIES && isTransientError(err)) {
+        const delayMs = RETRY_BASE_DELAY_MS * Math.pow(2, attempt);
+        log.warn('Transient error, retrying', {
+          ...context,
+          attempt: attempt + 1,
+          maxRetries: MAX_RETRIES,
+          delayMs,
+          ...log.serializeError(err),
+        });
+        await sleep(delayMs);
+      } else {
+        // Non-transient or exhausted retries
+        if (attempt > 0) {
+          log.error('All retries exhausted', {
+            ...context,
+            totalAttempts: attempt + 1,
+            ...log.serializeError(err),
+          });
+        }
+        throw err;
+      }
+    }
+  }
+  throw lastError;
+}
+
+/**
  * Create an Octokit client authenticated as a GitHub App installation.
- * Uses env:
- *  - GITHUB_APP_ID
- *  - GITHUB_PRIVATE_KEY (PEM; may contain literal \n)
- * Optional env:
- *  - GITHUB_INSTALLATION_ID (if you don't pass installationId param)
+ * Caches tokens per installationId to avoid redundant auth round-trips.
  */
 async function getInstallationOctokit({ installationId } = {}) {
   const appId = requireEnv('GITHUB_APP_ID');
@@ -28,6 +98,14 @@ async function getInstallationOctokit({ installationId } = {}) {
   const installId = installationId || process.env.GITHUB_INSTALLATION_ID;
   if (!installId) throw new Error('Missing installationId (param) or env GITHUB_INSTALLATION_ID');
 
+  const cacheKey = String(installId);
+  const cached = tokenCache.get(cacheKey);
+  if (cached && Date.now() - cached.createdAt < TOKEN_TTL_MS) {
+    log.debug('Using cached installation token', { installationId: cacheKey });
+    return cached.octokit;
+  }
+
+  log.debug('Creating new installation token', { installationId: cacheKey });
   const auth = createAppAuth({
     appId,
     privateKey,
@@ -35,57 +113,68 @@ async function getInstallationOctokit({ installationId } = {}) {
   });
 
   const { token } = await auth({ type: 'installation' });
-  return new Octokit({ auth: token });
+  const octokit = new Octokit({
+    auth: token,
+    request: { timeout: REQUEST_TIMEOUT_MS },
+  });
+
+  tokenCache.set(cacheKey, { octokit, createdAt: Date.now() });
+  return octokit;
 }
 
 /**
  * Get file SHA if it exists, else return null.
  */
 async function getExistingFileSha(octokit, { owner, repo, path, branch }) {
+  const context = { operation: 'getExistingFileSha', owner, repo, path, branch };
   try {
-    const r = await octokit.rest.repos.getContent({
-      owner,
-      repo,
-      path,
-      ref: branch,
-    });
-    // If path is a file, it will be an object with sha
+    const r = await octokit.rest.repos.getContent({ owner, repo, path, ref: branch });
     if (r?.data && !Array.isArray(r.data) && r.data.sha) return r.data.sha;
     return null;
   } catch (e) {
-    // 404 means file doesn't exist yet (that's OK)
     if (e && e.status === 404) return null;
+    // Log permission errors explicitly instead of swallowing them
+    if (e && e.status === 403) {
+      log.warn('Permission denied while checking file SHA (may indicate GitHub App missing repo access)', {
+        ...context,
+        ...log.serializeError(e),
+      });
+    }
     throw e;
   }
 }
 
 /**
  * Apply (create/update) exactly one file on a repo/branch.
- * Params:
- *  - owner, repo, branch, path, content, message
- *  - installationId (optional; defaults to env)
  */
 async function applyOneFile({ owner, repo, branch, path, content, message, installationId }) {
+  const context = { operation: 'applyOneFile', owner, repo, branch, path };
+  log.info('Applying file', context);
+  const startMs = Date.now();
+
   const octokit = await getInstallationOctokit({ installationId });
 
-  const sha = await getExistingFileSha(octokit, { owner, repo, path, branch });
+  const sha = await withRetry(
+    () => getExistingFileSha(octokit, { owner, repo, path, branch }),
+    { ...context, step: 'getExistingFileSha' }
+  );
 
-  const r = await octokit.rest.repos.createOrUpdateFileContents({
-    owner,
-    repo,
-    path,
-    message,
-    content: Buffer.from(content, 'utf8').toString('base64'),
-    branch,
-    ...(sha ? { sha } : {}),
-  });
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(content, 'utf8').toString('base64'),
+      branch,
+      ...(sha ? { sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('File applied successfully', { ...context, durationMs, created: !sha, updated: !!sha });
 
   return {
     committed: true,
-    owner,
-    repo,
-    branch,
-    path,
+    owner, repo, branch, path,
     created: !sha,
     updated: !!sha,
     commitSha: r?.data?.commit?.sha || null,
@@ -95,13 +184,9 @@ async function applyOneFile({ owner, repo, branch, path, content, message, insta
 
 /**
  * Dry-run helper: returns what would be applied, but does NOT touch GitHub.
- *
  * IMPORTANT: This function is intentionally pure/synchronous and makes NO API calls.
- * It only computes and returns metadata about what would happen.
- * This guarantees that dry-run mode can never accidentally commit anything.
  */
 function dryRunOneFile({ owner, repo, branch, path, content, message }) {
-  // No API calls here - purely local computation
   return {
     ok: true,
     wouldApply: { owner, repo, branch, path, bytes: Buffer.byteLength(content || '', 'utf8'), message },
@@ -111,17 +196,18 @@ function dryRunOneFile({ owner, repo, branch, path, content, message }) {
 /**
  * Read exactly one file from a repo/branch.
  * Returns decoded UTF-8 content.
- * Params: owner, repo, branch, path, installationId (optional)
  */
 async function readOneFile({ owner, repo, branch, path, installationId }) {
+  const context = { operation: 'readOneFile', owner, repo, branch, path };
+  log.debug('Reading file', context);
+  const startMs = Date.now();
+
   const octokit = await getInstallationOctokit({ installationId });
 
-  const r = await octokit.rest.repos.getContent({
-    owner,
-    repo,
-    path,
-    ref: branch,
-  });
+  const r = await withRetry(
+    () => octokit.rest.repos.getContent({ owner, repo, path, ref: branch }),
+    context
+  );
 
   if (!r || !r.data) throw new Error('Empty response from GitHub');
   if (Array.isArray(r.data)) {
@@ -135,17 +221,16 @@ async function readOneFile({ owner, repo, branch, path, installationId }) {
   let content = raw;
 
   if (encoding === 'base64') {
-    // GitHub may include line breaks in base64 payload
     const cleaned = raw.replace(/\n/g, '');
     content = Buffer.from(cleaned, 'base64').toString('utf8');
   }
 
+  const durationMs = Date.now() - startMs;
+  log.debug('File read successfully', { ...context, durationMs, size: r.data.size });
+
   return {
     ok: true,
-    owner,
-    repo,
-    branch,
-    path,
+    owner, repo, branch, path,
     sha: r.data.sha || null,
     size: typeof r.data.size === 'number' ? r.data.size : null,
     content,
@@ -154,30 +239,28 @@ async function readOneFile({ owner, repo, branch, path, installationId }) {
 
 /**
  * List the file tree of a repo/branch.
- * Returns an array of file paths.
- * Params: owner, repo, branch, path (optional, defaults to root), installationId (optional)
  */
 async function listTree({ owner, repo, branch, path, installationId }) {
-  const octokit = await getInstallationOctokit({ installationId });
+  const context = { operation: 'listTree', owner, repo, branch, path: path || '/' };
+  log.debug('Listing tree', context);
+  const startMs = Date.now();
 
+  const octokit = await getInstallationOctokit({ installationId });
   const targetPath = path || '';
 
-  const r = await octokit.rest.repos.getContent({
-    owner,
-    repo,
-    path: targetPath,
-    ref: branch,
-  });
+  const r = await withRetry(
+    () => octokit.rest.repos.getContent({ owner, repo, path: targetPath, ref: branch }),
+    context
+  );
 
   if (!r || !r.data) throw new Error('Empty response from GitHub');
 
-  // If it's a single file, return it as a one-item list
+  const durationMs = Date.now() - startMs;
+
   if (!Array.isArray(r.data)) {
+    log.debug('Listed single file', { ...context, durationMs });
     return {
-      ok: true,
-      owner,
-      repo,
-      branch,
+      ok: true, owner, repo, branch,
       path: targetPath || '/',
       entries: [{
         name: r.data.name,
@@ -188,7 +271,6 @@ async function listTree({ owner, repo, branch, path, installationId }) {
     };
   }
 
-  // Directory listing
   const entries = r.data.map(item => ({
     name: item.name,
     path: item.path,
@@ -196,11 +278,10 @@ async function listTree({ owner, repo, branch, path, installationId }) {
     size: item.size || 0,
   }));
 
+  log.debug('Listed directory', { ...context, durationMs, entryCount: entries.length });
+
   return {
-    ok: true,
-    owner,
-    repo,
-    branch,
+    ok: true, owner, repo, branch,
     path: targetPath || '/',
     entries,
   };
@@ -212,4 +293,7 @@ module.exports = {
   dryRunOneFile,
   readOneFile,
   listTree,
+  // Exported for testing
+  isTransientError,
+  withRetry,
 };
