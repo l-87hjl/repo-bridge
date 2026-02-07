@@ -59,7 +59,7 @@ app.get('/', (req, res) => {
     service: 'repo-bridge',
     status: 'running',
     version: '0.4.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure'],
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook'],
   });
 });
 
@@ -922,6 +922,28 @@ function computeLCS(a, b) {
   }
   return result;
 }
+
+// ─── GitHub webhook handler ───────────────────────────────────────────────────
+// repo-bridge is pull-based (agent calls us, we call GitHub), so it does NOT
+// require webhooks. However, if you configure a webhook URL in your GitHub App
+// settings, GitHub will POST events here. We accept them gracefully to avoid
+// failed-delivery warnings in your App's Advanced tab.
+
+function handleWebhook(req, res) {
+  const event = req.headers['x-github-event'] || 'unknown';
+  const deliveryId = req.headers['x-github-delivery'] || 'unknown';
+  log.info('Webhook received (acknowledged, not processed)', {
+    event,
+    deliveryId,
+    action: req.body?.action || null,
+  });
+  // Return 200 so GitHub marks the delivery as successful
+  res.status(200).json({ ok: true, event, message: 'Webhook acknowledged. repo-bridge is pull-based and does not process webhook events.' });
+}
+
+// Accept webhooks at both paths — GitHub App is configured to POST to /github/webhook
+app.post('/webhook', handleWebhook);
+app.post('/github/webhook', handleWebhook);
 
 // ─── Catch-all and error handler ──────────────────────────────────────────────
 
