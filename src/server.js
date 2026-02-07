@@ -112,23 +112,45 @@ function forbidden(res, message) {
  * Build a structured error response with diagnostic context.
  */
 function errorResponse(res, statusCode, errorType, err, context = {}) {
+  // Override status code for known GitHub error statuses
+  const githubStatus = err?.status;
+  if (githubStatus === 403 || githubStatus === 401) {
+    statusCode = githubStatus;
+  }
+
   const body = {
     ok: false,
     error: errorType,
     message: err?.message || String(err),
     requestId: context.requestId || null,
   };
+
   // Include diagnostic hints for common failures
-  if (err?.status === 401 || err?.status === 403) {
-    body.hint = 'Check that the GitHub App is installed on the target repository and has the required permissions.';
+  if (githubStatus === 403) {
+    const msg = (err?.message || '').toLowerCase();
+    if (msg.includes('resource not accessible') || msg.includes('not accessible by integration')) {
+      body.hint = 'The GitHub App is not installed on this repository, or it lacks the required permissions. '
+        + 'Go to GitHub > Settings > Developer settings > GitHub Apps > repo-bridge-app > Install App, '
+        + 'and ensure this repository is selected.';
+      body.diagnosis = 'GITHUB_APP_NOT_INSTALLED_ON_REPO';
+    } else {
+      body.hint = 'Access denied by GitHub. Check that the GitHub App is installed on this repository and has Contents:read permission.';
+      body.diagnosis = 'GITHUB_PERMISSION_DENIED';
+    }
+  }
+  if (githubStatus === 401) {
+    body.hint = 'GitHub authentication failed. The installation token may have expired or the GitHub App credentials are misconfigured. Check GITHUB_APP_ID and GITHUB_PRIVATE_KEY.';
+    body.diagnosis = 'GITHUB_AUTH_FAILED';
   }
   if (err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || (err?.message || '').toLowerCase().includes('clientresponseerror')) {
     body.hint = 'This is a transient network error. The request was retried automatically but all attempts failed. Try again in a few seconds.';
     body.transient = true;
+    body.diagnosis = 'TRANSIENT_NETWORK_ERROR';
   }
-  if (err?.status === 429) {
+  if (githubStatus === 429) {
     body.hint = 'GitHub API rate limit exceeded. Wait for the rate limit to reset before retrying.';
     body.transient = true;
+    body.diagnosis = 'RATE_LIMIT_EXCEEDED';
   }
   log.error(`${errorType} response`, {
     requestId: context.requestId,
@@ -383,12 +405,12 @@ app.post('/read', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found', requestId: req.requestId });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found. Verify the path exists by calling /list first.', requestId: req.requestId });
     }
     if (status === 400) {
       return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e), requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId });
+    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
   }
 });
 
@@ -414,9 +436,9 @@ app.post('/list', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found', requestId: req.requestId });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found. Check that the branch exists and the path is correct.', requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId });
+    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
   }
 });
 

@@ -206,11 +206,26 @@ Check if repo-bridge is running and connected to GitHub.
 | `Unauthorized` | 401 | Invalid auth token | Check Authorization header |
 | `Forbidden` | 403 | Repo or path not in allowlist | Use an allowed repo/path |
 | `RepoReadOnly` | 403 | Repo is read-only | You cannot write to this repo |
+| `ReadFailed` | 403 | GitHub App not installed on repo | See "Diagnosis Fields" below — tell user to install app on this repo |
 | `NotFound` | 404 | File or path doesn't exist | Verify with `/list` first |
 | `ReadFailed` | 500 | GitHub API error on read | Check `hint` and `transient` fields |
 | `ApplyFailed` | 500 | GitHub API error on write | Check `hint` and `transient` fields |
 | `CompareFailed` | 500 | Comparison error | One or both files may not exist |
 | `CompareStructureFailed` | 500 | Structure comparison error | One or both paths may not exist |
+
+### Diagnosis Fields (v0.4.0+)
+
+Error responses include a `diagnosis` field that tells you exactly what went wrong:
+
+| Diagnosis | Meaning | What To Tell the User |
+|-----------|---------|----------------------|
+| `GITHUB_APP_NOT_INSTALLED_ON_REPO` | The GitHub App isn't installed on this specific repository | "The repo-bridge GitHub App needs to be installed on this repository. Go to GitHub Settings > Developer settings > GitHub Apps > repo-bridge-app > Install App, and make sure this repo is selected." |
+| `GITHUB_PERMISSION_DENIED` | App is installed but lacks required permissions | "The repo-bridge GitHub App needs Contents:read permission on this repository." |
+| `GITHUB_AUTH_FAILED` | Installation token expired or credentials wrong | "There may be a configuration issue with the GitHub App. Check the server's GITHUB_APP_ID and GITHUB_PRIVATE_KEY." |
+| `TRANSIENT_NETWORK_ERROR` | Network blip between repo-bridge and GitHub | "This is a temporary error. Wait 10 seconds and retry." |
+| `RATE_LIMIT_EXCEEDED` | Hit GitHub's 5,000 requests/hour limit | "GitHub rate limit hit. Wait a few minutes and retry." |
+
+**Important:** If you see `GITHUB_APP_NOT_INSTALLED_ON_REPO`, this is NOT a transient error — retrying will not help. The user must install the GitHub App on that repository.
 
 ### Transient Errors
 
