@@ -14,6 +14,19 @@ const RETRY_BASE_DELAY_MS = Number(process.env.RETRY_BASE_DELAY_MS) || 1000;
 const tokenCache = new Map();
 const TOKEN_TTL_MS = 50 * 60 * 1000;
 
+/**
+ * Invalidate cached token for an installation.
+ * Called when we get a 403 that might be due to a stale token scope
+ * (e.g., repos added to installation after token was generated).
+ */
+function invalidateTokenCache(installationId) {
+  const key = String(installationId || process.env.GITHUB_INSTALLATION_ID);
+  if (tokenCache.has(key)) {
+    log.info('Invalidating cached token', { installationId: key });
+    tokenCache.delete(key);
+  }
+}
+
 function requireEnv(name) {
   const v = process.env[name];
   if (!v) throw new Error(`Missing required env var: ${name}`);
@@ -197,17 +210,29 @@ function dryRunOneFile({ owner, repo, branch, path, content, message }) {
  * Read exactly one file from a repo/branch.
  * Returns decoded UTF-8 content.
  */
-async function readOneFile({ owner, repo, branch, path, installationId }) {
+async function readOneFile({ owner, repo, branch, path, installationId, _retryOnAuth = true }) {
   const context = { operation: 'readOneFile', owner, repo, branch, path };
   log.debug('Reading file', context);
   const startMs = Date.now();
 
   const octokit = await getInstallationOctokit({ installationId });
 
-  const r = await withRetry(
-    () => octokit.rest.repos.getContent({ owner, repo, path, ref: branch }),
-    context
-  );
+  let r;
+  try {
+    r = await withRetry(
+      () => octokit.rest.repos.getContent({ owner, repo, path, ref: branch }),
+      context
+    );
+  } catch (e) {
+    // On 403, the cached token may be scoped to an older set of repos.
+    // Invalidate cache and retry once with a fresh token.
+    if (e.status === 403 && _retryOnAuth) {
+      log.warn('Got 403, invalidating token cache and retrying with fresh token', context);
+      invalidateTokenCache(installationId);
+      return readOneFile({ owner, repo, branch, path, installationId, _retryOnAuth: false });
+    }
+    throw e;
+  }
 
   if (!r || !r.data) throw new Error('Empty response from GitHub');
   if (Array.isArray(r.data)) {
@@ -240,7 +265,7 @@ async function readOneFile({ owner, repo, branch, path, installationId }) {
 /**
  * List the file tree of a repo/branch.
  */
-async function listTree({ owner, repo, branch, path, installationId }) {
+async function listTree({ owner, repo, branch, path, installationId, _retryOnAuth = true }) {
   const context = { operation: 'listTree', owner, repo, branch, path: path || '/' };
   log.debug('Listing tree', context);
   const startMs = Date.now();
@@ -248,10 +273,20 @@ async function listTree({ owner, repo, branch, path, installationId }) {
   const octokit = await getInstallationOctokit({ installationId });
   const targetPath = path || '';
 
-  const r = await withRetry(
-    () => octokit.rest.repos.getContent({ owner, repo, path: targetPath, ref: branch }),
-    context
-  );
+  let r;
+  try {
+    r = await withRetry(
+      () => octokit.rest.repos.getContent({ owner, repo, path: targetPath, ref: branch }),
+      context
+    );
+  } catch (e) {
+    if (e.status === 403 && _retryOnAuth) {
+      log.warn('Got 403, invalidating token cache and retrying with fresh token', context);
+      invalidateTokenCache(installationId);
+      return listTree({ owner, repo, branch, path, installationId, _retryOnAuth: false });
+    }
+    throw e;
+  }
 
   if (!r || !r.data) throw new Error('Empty response from GitHub');
 
@@ -293,6 +328,7 @@ module.exports = {
   dryRunOneFile,
   readOneFile,
   listTree,
+  invalidateTokenCache,
   // Exported for testing
   isTransientError,
   withRetry,
