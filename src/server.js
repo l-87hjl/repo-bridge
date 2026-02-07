@@ -381,13 +381,13 @@ app.post('/apply', requireAuth, async (req, res) => {
 });
 
 app.post('/read', requireAuth, async (req, res) => {
-  try {
-    const b = req.body || {};
-    const { owner, repo } = parseOwnerRepo(b);
-    const branch = b.branch || DEFAULT_BRANCH;
-    const path = b.path;
-    const installationId = b.installationId;
+  const b = req.body || {};
+  const { owner, repo } = parseOwnerRepo(b);
+  const branch = b.branch || DEFAULT_BRANCH;
+  const path = b.path;
+  const installationId = b.installationId;
 
+  try {
     if (!owner || !repo || !path) {
       return badRequest(res, 'Required: owner, repo, path. Optional: branch (defaults to main)');
     }
@@ -410,18 +410,18 @@ app.post('/read', requireAuth, async (req, res) => {
     if (status === 400) {
       return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e), requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
+    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId, owner, repo, path });
   }
 });
 
 app.post('/list', requireAuth, async (req, res) => {
-  try {
-    const b = req.body || {};
-    const { owner, repo } = parseOwnerRepo(b);
-    const branch = b.branch || DEFAULT_BRANCH;
-    const path = b.path || '';
-    const installationId = b.installationId;
+  const b = req.body || {};
+  const { owner, repo } = parseOwnerRepo(b);
+  const branch = b.branch || DEFAULT_BRANCH;
+  const path = b.path || '';
+  const installationId = b.installationId;
 
+  try {
     if (!owner || !repo) {
       return badRequest(res, 'Required: owner, repo. Optional: path (defaults to root), branch (defaults to main)');
     }
@@ -438,7 +438,7 @@ app.post('/list', requireAuth, async (req, res) => {
     if (status === 404) {
       return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found. Check that the branch exists and the path is correct.', requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
+    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId, owner, repo, path });
   }
 });
 
