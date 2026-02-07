@@ -134,7 +134,7 @@ Compare what files and folders exist in two repo directories without reading fil
 
 ### 6. Write a File (`applyFile` / POST /apply)
 
-Create or update a file in a writable repository. Every write creates a Git commit.
+**This is how you write to GitHub.** Create or update a file in a writable repository. Every call creates a real Git commit. Do NOT use /dryRun — use /apply directly to commit files.
 
 ```json
 {
@@ -174,21 +174,7 @@ Copy a file from one repo to another in a single call (reads source, writes to d
 }
 ```
 
-### 8. Dry Run (`dryRun` / POST /dryRun)
-
-Preview what a write would do without actually committing. Makes zero GitHub API calls.
-
-```json
-{
-  "repo": "l-87hjl/repo-name",
-  "path": "file.txt",
-  "content": "...",
-  "message": "...",
-  "dryRun": true
-}
-```
-
-### 9. Health Check (GET /health)
+### 8. Health Check (GET /health)
 
 Check if repo-bridge is running and connected to GitHub.
 
@@ -264,8 +250,7 @@ Always orient yourself before making changes:
 Step 1: /list → See what's in the repo
 Step 2: /batchRead → Read key files (README, config, etc.)
 Step 3: /compare or /compareStructure → Understand differences
-Step 4: /dryRun → Preview your changes
-Step 5: /apply → Make the change
+Step 4: /apply → Write the change (creates a real Git commit)
 ```
 
 ### 2. Use Batch Operations
@@ -339,7 +324,6 @@ STRUCT  → POST /compareStructure { source: { repo, path, branch }, target: { r
 WRITE   → POST /apply        { repo, path, content, message, branch }
 MULTI   → POST /apply        { repo, changes: [{ path, content }], message }
 COPY    → POST /copy         { sourceRepo, sourcePath, destinationRepo, destinationPath, message }
-DRY RUN → POST /dryRun       { repo, path, content, message }
 HEALTH  → GET  /health
 ```
 

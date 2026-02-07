@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge",
-    "version": "1.4.0"
+    "version": "1.5.0"
   },
   "servers": [
     {
@@ -256,7 +256,7 @@
     "/apply": {
       "post": {
         "operationId": "applyFile",
-        "summary": "Create or update files in a GitHub repository.",
+        "summary": "Write files to GitHub. Creates a real Git commit. Use this to create or update files in a repository.",
         "requestBody": {
           "required": true,
           "content": {
@@ -267,19 +267,18 @@
                     "type": "object",
                     "required": ["repo", "path", "content", "message"],
                     "properties": {
-                      "repo": { "type": "string" },
-                      "path": { "type": "string" },
-                      "content": { "type": "string" },
-                      "message": { "type": "string" },
-                      "branch": { "type": "string" },
-                      "dryRun": { "type": "boolean" }
+                      "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/repo-name" },
+                      "path": { "type": "string", "description": "File path in the repo" },
+                      "content": { "type": "string", "description": "Full file contents to write" },
+                      "message": { "type": "string", "description": "Git commit message" },
+                      "branch": { "type": "string", "description": "Target branch. Defaults to main" }
                     }
                   },
                   {
                     "type": "object",
                     "required": ["repo", "changes", "message"],
                     "properties": {
-                      "repo": { "type": "string" },
+                      "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/repo-name" },
                       "changes": {
                         "type": "array",
                         "minItems": 1,
@@ -292,9 +291,8 @@
                           }
                         }
                       },
-                      "message": { "type": "string" },
-                      "branch": { "type": "string" },
-                      "dryRun": { "type": "boolean" }
+                      "message": { "type": "string", "description": "Git commit message" },
+                      "branch": { "type": "string", "description": "Target branch. Defaults to main" }
                     }
                   }
                 ]
@@ -305,40 +303,6 @@
         "responses": {
           "200": {
             "description": "Apply result",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/dryRun": {
-      "post": {
-        "operationId": "dryRun",
-        "summary": "Preview a file change without committing.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["repo", "path", "content", "message"],
-                "properties": {
-                  "repo": { "type": "string" },
-                  "path": { "type": "string" },
-                  "content": { "type": "string" },
-                  "message": { "type": "string" },
-                  "branch": { "type": "string" }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Dry run preview",
             "content": {
               "application/json": {
                 "schema": { "type": "object" }
