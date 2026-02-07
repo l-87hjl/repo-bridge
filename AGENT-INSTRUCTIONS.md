@@ -132,9 +132,11 @@ Compare what files and folders exist in two repo directories without reading fil
 - Find missing files after a copy operation
 - Audit repo standardization
 
-### 6. Write a File (`applyFile` / POST /apply)
+### 6. Write a File (`writeFile` / POST /apply)
 
-**This is how you write to GitHub.** Create or update a file in a writable repository. Every call creates a real Git commit. Do NOT use /dryRun — use /apply directly to commit files.
+**This is how you write to GitHub.** Create or update a file in a writable repository. Every call creates a real Git commit.
+
+**CRITICAL:** When the user asks you to create a file with specific content, you MUST use `/apply` with the content in the `content` field. Do NOT use `/copy` — that only duplicates existing files and cannot write new content.
 
 ```json
 {
@@ -146,7 +148,20 @@ Compare what files and folders exist in two repo directories without reading fil
 }
 ```
 
-**Multi-file writes:**
+**Example — creating a markdown file:**
+```json
+{
+  "repo": "l-87hjl/alexandria-scribe",
+  "path": "CHECKLIST_STATUS.md",
+  "content": "# Checklist\n\n- [ ] Item one\n- [ ] Item two\n",
+  "message": "Create checklist status document",
+  "branch": "main"
+}
+```
+
+The `content` field is a string containing the **complete file text** you want to write. For markdown, JSON, code, or any other file type — put the full text in `content`.
+
+**Multi-file writes** (advanced — same endpoint, different payload shape):
 ```json
 {
   "repo": "l-87hjl/repo-name",
@@ -159,6 +174,17 @@ Compare what files and folders exist in two repo directories without reading fil
 ```
 
 **Important:** Some repos are read-only. If you get a `RepoReadOnly` error, you cannot write to that repo.
+
+### When to use /apply vs /copy
+
+| Scenario | Use | Endpoint |
+|----------|-----|----------|
+| Write new content (text, markdown, code, JSON) | **/apply** | `POST /apply` with `content` field |
+| Update an existing file with new content | **/apply** | `POST /apply` with `content` field |
+| Duplicate a file that already exists in another repo | **/copy** | `POST /copy` |
+| User gave you text and said "write this to a file" | **/apply** | `POST /apply` with `content` field |
+
+**Rule of thumb:** If you have the text that should go in the file, use `/apply`. Only use `/copy` when you want to duplicate an existing file as-is.
 
 ### 7. Copy Between Repos (`copyFile` / POST /copy)
 
@@ -321,11 +347,13 @@ LIST    → POST /list         { repo, path, branch }
 BATCH   → POST /batchRead    { files: [{ repo, path, branch }] }
 COMPARE → POST /compare      { source: { repo, path, branch }, target: { repo, path, branch } }
 STRUCT  → POST /compareStructure { source: { repo, path, branch }, target: { repo, path, branch } }
-WRITE   → POST /apply        { repo, path, content, message, branch }
+WRITE   → POST /apply        { repo, path, content, message, branch }  ← USE THIS TO WRITE CONTENT
 MULTI   → POST /apply        { repo, changes: [{ path, content }], message }
 COPY    → POST /copy         { sourceRepo, sourcePath, destinationRepo, destinationPath, message }
 HEALTH  → GET  /health
 ```
+
+**Remember:** `/apply` = write content you provide. `/copy` = duplicate an existing file. Never use `/copy` to write new content.
 
 **Owner for all calls:** `l-87hjl`
 **Default branch:** `main`

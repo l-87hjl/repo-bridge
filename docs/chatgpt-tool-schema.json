@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge",
-    "version": "1.5.0"
+    "version": "1.6.0"
   },
   "servers": [
     {
@@ -220,7 +220,7 @@
     "/copy": {
       "post": {
         "operationId": "copyFile",
-        "summary": "Copy a file from one repository to another.",
+        "summary": "Copy an existing file from one repository to another. Only use this to duplicate a file that already exists — to write new content, use /apply instead.",
         "requestBody": {
           "required": true,
           "content": {
@@ -255,54 +255,30 @@
     },
     "/apply": {
       "post": {
-        "operationId": "applyFile",
-        "summary": "Write files to GitHub. Creates a real Git commit. Use this to create or update files in a repository.",
+        "operationId": "writeFile",
+        "summary": "Write a file to GitHub. Creates or updates a file with the content you provide, creating a real Git commit. To write custom content to a new or existing file, use this endpoint — do NOT use /copy for that purpose.",
+        "description": "This is the primary endpoint for creating files with new content. You MUST provide the full file content as a string in the content field. The /copy endpoint is only for duplicating an existing file from one repo to another — never use /copy when you have content to write.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
               "schema": {
-                "oneOf": [
-                  {
-                    "type": "object",
-                    "required": ["repo", "path", "content", "message"],
-                    "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/repo-name" },
-                      "path": { "type": "string", "description": "File path in the repo" },
-                      "content": { "type": "string", "description": "Full file contents to write" },
-                      "message": { "type": "string", "description": "Git commit message" },
-                      "branch": { "type": "string", "description": "Target branch. Defaults to main" }
-                    }
-                  },
-                  {
-                    "type": "object",
-                    "required": ["repo", "changes", "message"],
-                    "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/repo-name" },
-                      "changes": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": {
-                          "type": "object",
-                          "required": ["path", "content"],
-                          "properties": {
-                            "path": { "type": "string" },
-                            "content": { "type": "string" }
-                          }
-                        }
-                      },
-                      "message": { "type": "string", "description": "Git commit message" },
-                      "branch": { "type": "string", "description": "Target branch. Defaults to main" }
-                    }
-                  }
-                ]
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format, e.g. l-87hjl/alexandria-scribe" },
+                  "path": { "type": "string", "description": "File path to create or update, e.g. docs/CHECKLIST.md" },
+                  "content": { "type": "string", "description": "The complete file content to write as a string. For markdown, include the full markdown text. For JSON, include the full JSON string." },
+                  "message": { "type": "string", "description": "Git commit message describing what was written and why" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." }
+                }
               }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Apply result",
+            "description": "File written successfully. Returns commit SHA and file metadata.",
             "content": {
               "application/json": {
                 "schema": { "type": "object" }
