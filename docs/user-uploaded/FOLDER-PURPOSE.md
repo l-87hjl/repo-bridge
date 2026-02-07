@@ -1,0 +1,1 @@
+to create working agent schemas, it's necessary to use the non-repo bridge connected version of the AI in this case regular ChatGPT and notGPT agent, to help understand the changes that need to be made the schemas to make them operational, which often includes idiosyncratic or known issues that don't necessarily make it into the documentation.
