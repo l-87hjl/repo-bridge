@@ -153,6 +153,29 @@ Both paths work. repo-bridge v0.4.0 includes webhook endpoints that acknowledge 
 
 **Option B:** If you don't need webhooks at all (repo-bridge is pull-based), uncheck the "Active" checkbox under Webhook in your GitHub App settings. This stops GitHub from sending events entirely.
 
+### Most Common Error: "client error" / 403 on a Specific Repo
+
+If repo-bridge is working for some repos but failing on others (like the `agent-project-space` example), the cause is almost always:
+
+**The GitHub App is not installed on that repository.**
+
+The GitHub App must be explicitly installed on **every repo** the agent needs to access. Having it installed on `repo-bridge` does NOT automatically grant access to `agent-project-space`.
+
+**How to fix:**
+
+1. Go to **GitHub > Settings > Developer settings > GitHub Apps > repo-bridge-app**
+2. Click **Install App** in the left sidebar
+3. Select your account (`l-87hjl`)
+4. Choose either:
+   - **All repositories** — easiest, auto-covers new repos
+   - **Only select repositories** — pick each repo individually
+5. Make sure the repo that's failing (`agent-project-space`, etc.) is checked
+6. Click **Save**
+
+After saving, the agent should immediately be able to read from that repo.
+
+**How to verify:** Call `/health` — if it returns `github.connected: true`, the app auth is working. Then call `/list` on the specific repo. If you get a 403, that repo isn't in the installation.
+
 ### What v0.4.0 does about it
 
 repo-bridge v0.4.0 now includes:

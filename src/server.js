@@ -59,7 +59,7 @@ app.get('/', (req, res) => {
     service: 'repo-bridge',
     status: 'running',
     version: '0.4.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook'],
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
   });
 });
 
@@ -112,23 +112,45 @@ function forbidden(res, message) {
  * Build a structured error response with diagnostic context.
  */
 function errorResponse(res, statusCode, errorType, err, context = {}) {
+  // Override status code for known GitHub error statuses
+  const githubStatus = err?.status;
+  if (githubStatus === 403 || githubStatus === 401) {
+    statusCode = githubStatus;
+  }
+
   const body = {
     ok: false,
     error: errorType,
     message: err?.message || String(err),
     requestId: context.requestId || null,
   };
+
   // Include diagnostic hints for common failures
-  if (err?.status === 401 || err?.status === 403) {
-    body.hint = 'Check that the GitHub App is installed on the target repository and has the required permissions.';
+  if (githubStatus === 403) {
+    const msg = (err?.message || '').toLowerCase();
+    if (msg.includes('resource not accessible') || msg.includes('not accessible by integration')) {
+      body.hint = 'The GitHub App is not installed on this repository, or it lacks the required permissions. '
+        + 'Go to GitHub > Settings > Developer settings > GitHub Apps > repo-bridge-app > Install App, '
+        + 'and ensure this repository is selected.';
+      body.diagnosis = 'GITHUB_APP_NOT_INSTALLED_ON_REPO';
+    } else {
+      body.hint = 'Access denied by GitHub. Check that the GitHub App is installed on this repository and has Contents:read permission.';
+      body.diagnosis = 'GITHUB_PERMISSION_DENIED';
+    }
+  }
+  if (githubStatus === 401) {
+    body.hint = 'GitHub authentication failed. The installation token may have expired or the GitHub App credentials are misconfigured. Check GITHUB_APP_ID and GITHUB_PRIVATE_KEY.';
+    body.diagnosis = 'GITHUB_AUTH_FAILED';
   }
   if (err?.code === 'ECONNRESET' || err?.code === 'ETIMEDOUT' || (err?.message || '').toLowerCase().includes('clientresponseerror')) {
     body.hint = 'This is a transient network error. The request was retried automatically but all attempts failed. Try again in a few seconds.';
     body.transient = true;
+    body.diagnosis = 'TRANSIENT_NETWORK_ERROR';
   }
-  if (err?.status === 429) {
+  if (githubStatus === 429) {
     body.hint = 'GitHub API rate limit exceeded. Wait for the rate limit to reset before retrying.';
     body.transient = true;
+    body.diagnosis = 'RATE_LIMIT_EXCEEDED';
   }
   log.error(`${errorType} response`, {
     requestId: context.requestId,
@@ -383,12 +405,12 @@ app.post('/read', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found', requestId: req.requestId });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found. Verify the path exists by calling /list first.', requestId: req.requestId });
     }
     if (status === 400) {
       return res.status(400).json({ ok: false, error: 'BadRequest', message: e?.message || String(e), requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId });
+    return errorResponse(res, 500, 'ReadFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
   }
 });
 
@@ -414,9 +436,9 @@ app.post('/list', requireAuth, async (req, res) => {
   } catch (e) {
     const status = e?.status;
     if (status === 404) {
-      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found', requestId: req.requestId });
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Path not found. Check that the branch exists and the path is correct.', requestId: req.requestId });
     }
-    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId });
+    return errorResponse(res, 500, 'ListFailed', e, { requestId: req.requestId, owner: b.owner || b.repo, path: b.path });
   }
 });
 
@@ -944,6 +966,159 @@ function handleWebhook(req, res) {
 // Accept webhooks at both paths — GitHub App is configured to POST to /github/webhook
 app.post('/webhook', handleWebhook);
 app.post('/github/webhook', handleWebhook);
+
+// ─── Diagnostic endpoint ──────────────────────────────────────────────────────
+/**
+ * POST /diagnose - Test connectivity and permissions for a specific repo.
+ *
+ * Returns detailed information about what's happening when accessing a repo:
+ * auth status, rate limits, whether the repo is accessible, exact error messages.
+ * Use this when reads/writes fail and you need to understand why.
+ */
+app.post('/diagnose', requireAuth, async (req, res) => {
+  const b = req.body || {};
+  const { owner, repo } = parseOwnerRepo(b);
+  const branch = b.branch || DEFAULT_BRANCH;
+  const path = b.path || 'README.md';
+
+  const report = {
+    ok: true,
+    timestamp: new Date().toISOString(),
+    requestId: req.requestId,
+    input: { owner, repo, branch, path },
+    checks: {},
+  };
+
+  if (!owner || !repo) {
+    return badRequest(res, 'Required: repo (owner/repo format). Optional: branch, path');
+  }
+
+  // Check 1: Is repo in allowlist?
+  report.checks.allowlist = {
+    repoAllowed: isRepoAllowed(owner, repo),
+    pathAllowed: isPathAllowed(path),
+    readOnly: isRepoReadOnly(owner, repo),
+  };
+  if (!report.checks.allowlist.repoAllowed) {
+    report.ok = false;
+    report.checks.allowlist.error = 'Repository is not in ALLOWED_REPOS. Add it to the env var.';
+    return res.json(report);
+  }
+
+  // Check 2: Can we generate an installation token?
+  try {
+    const { getInstallationOctokit } = require('./github');
+    const octokit = await getInstallationOctokit({ installationId: b.installationId });
+    report.checks.auth = { ok: true, message: 'Installation token generated successfully' };
+
+    // Check 3: Rate limit status
+    try {
+      const { data } = await octokit.rest.rateLimit.get();
+      report.checks.rateLimit = {
+        ok: data.rate.remaining > 0,
+        remaining: data.rate.remaining,
+        limit: data.rate.limit,
+        resetsAt: new Date(data.rate.reset * 1000).toISOString(),
+      };
+      if (data.rate.remaining === 0) {
+        report.ok = false;
+        report.checks.rateLimit.error = 'Rate limit exhausted. Wait for reset.';
+        return res.json(report);
+      }
+    } catch (e) {
+      report.checks.rateLimit = { ok: false, error: e.message };
+    }
+
+    // Check 4: Can we access the repo at all? (list root)
+    try {
+      const r = await octokit.rest.repos.getContent({ owner, repo, path: '', ref: branch });
+      const entries = Array.isArray(r.data) ? r.data.length : 1;
+      report.checks.repoAccess = {
+        ok: true,
+        message: `Successfully listed repo root (${entries} entries)`,
+        branch,
+      };
+    } catch (e) {
+      report.ok = false;
+      report.checks.repoAccess = {
+        ok: false,
+        httpStatus: e.status,
+        message: e.message,
+        ...log.serializeError(e),
+      };
+
+      // Provide specific diagnosis
+      if (e.status === 404) {
+        // Could be: repo doesn't exist, branch doesn't exist, or app lacks access
+        report.checks.repoAccess.diagnosis = 'REPO_OR_BRANCH_NOT_FOUND';
+        report.checks.repoAccess.hint = `Either the repository "${owner}/${repo}" does not exist, or the branch "${branch}" does not exist. `
+          + 'Try a different branch name (e.g., "master" instead of "main"). '
+          + 'Also check if the repo is private and the GitHub App has access.';
+
+        // Try to determine if repo exists but branch is wrong
+        try {
+          const repoInfo = await octokit.rest.repos.get({ owner, repo });
+          report.checks.repoAccess.repoExists = true;
+          report.checks.repoAccess.defaultBranch = repoInfo.data.default_branch;
+          report.checks.repoAccess.private = repoInfo.data.private;
+          if (repoInfo.data.default_branch !== branch) {
+            report.checks.repoAccess.diagnosis = 'BRANCH_MISMATCH';
+            report.checks.repoAccess.hint = `Repository exists but its default branch is "${repoInfo.data.default_branch}", not "${branch}". Use branch: "${repoInfo.data.default_branch}" in your requests.`;
+          }
+        } catch (repoErr) {
+          report.checks.repoAccess.repoExists = false;
+          report.checks.repoAccess.repoError = repoErr.message;
+          if (repoErr.status === 403) {
+            report.checks.repoAccess.diagnosis = 'GITHUB_APP_CANNOT_SEE_REPO';
+            report.checks.repoAccess.hint = 'The GitHub App cannot access this repository at all. Verify the app is installed on this repo in GitHub App settings > Install App.';
+          }
+        }
+
+        return res.json(report);
+      }
+
+      if (e.status === 403) {
+        report.checks.repoAccess.diagnosis = 'PERMISSION_DENIED';
+        report.checks.repoAccess.hint = 'GitHub returned 403. The app may not be installed on this repo, or it lacks Contents:read permission.';
+        return res.json(report);
+      }
+
+      return res.json(report);
+    }
+
+    // Check 5: Can we read the specific file?
+    try {
+      const r = await octokit.rest.repos.getContent({ owner, repo, path, ref: branch });
+      const isDir = Array.isArray(r.data);
+      report.checks.fileAccess = {
+        ok: true,
+        type: isDir ? 'directory' : 'file',
+        size: isDir ? r.data.length + ' entries' : r.data.size + ' bytes',
+        sha: isDir ? null : r.data.sha,
+      };
+    } catch (e) {
+      report.checks.fileAccess = {
+        ok: false,
+        httpStatus: e.status,
+        message: e.message,
+      };
+      if (e.status === 404) {
+        report.checks.fileAccess.hint = `File "${path}" does not exist on branch "${branch}". The repo IS accessible though — try a different path.`;
+      }
+    }
+
+  } catch (e) {
+    report.ok = false;
+    report.checks.auth = {
+      ok: false,
+      message: e.message,
+      ...log.serializeError(e),
+      hint: 'Failed to generate installation token. Check GITHUB_APP_ID, GITHUB_PRIVATE_KEY, and GITHUB_INSTALLATION_ID in Render environment variables.',
+    };
+  }
+
+  return res.json(report);
+});
 
 // ─── Catch-all and error handler ──────────────────────────────────────────────
 
