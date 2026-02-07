@@ -1,0 +1,400 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "repo-bridge",
+    "version": "1.4.0"
+  },
+  "servers": [
+    {
+      "url": "https://repo-bridge.onrender.com"
+    }
+  ],
+  "paths": {
+    "/list": {
+      "post": {
+        "operationId": "listDirectory",
+        "summary": "List files and directories in a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Directory listing",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/read": {
+      "post": {
+        "operationId": "readFile",
+        "summary": "Read a single file from a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File contents",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/batchRead": {
+      "post": {
+        "operationId": "batchRead",
+        "summary": "Read multiple files from one or more repositories.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "items": {
+                      "type": "object",
+                      "required": ["repo", "path"],
+                      "properties": {
+                        "repo": { "type": "string" },
+                        "path": { "type": "string" },
+                        "branch": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Batch read results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/compare": {
+      "post": {
+        "operationId": "compareFiles",
+        "summary": "Compare a file between two repositories or branches. Returns both contents and a line-by-line diff.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo", "path"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Defaults to source.path if omitted" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "options": {
+                    "type": "object",
+                    "properties": {
+                      "includeContent": { "type": "boolean", "description": "Include full file contents in response. Defaults to true." }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Comparison result with diff",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/compareStructure": {
+      "post": {
+        "operationId": "compareStructure",
+        "summary": "Compare directory structures between two repositories. Returns files only in source, only in target, and in both.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "branch": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Structure comparison result",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/copy": {
+      "post": {
+        "operationId": "copyFile",
+        "summary": "Copy a file from one repository to another.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sourceRepo", "sourcePath", "destinationRepo"],
+                "properties": {
+                  "sourceRepo": { "type": "string" },
+                  "sourcePath": { "type": "string" },
+                  "sourceBranch": { "type": "string" },
+                  "destinationRepo": { "type": "string" },
+                  "destinationPath": { "type": "string" },
+                  "destinationBranch": { "type": "string" },
+                  "message": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Copy result",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/apply": {
+      "post": {
+        "operationId": "applyFile",
+        "summary": "Create or update files in a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "type": "object",
+                    "required": ["repo", "path", "content", "message"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
+                      "content": { "type": "string" },
+                      "message": { "type": "string" },
+                      "branch": { "type": "string" },
+                      "dryRun": { "type": "boolean" }
+                    }
+                  },
+                  {
+                    "type": "object",
+                    "required": ["repo", "changes", "message"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "changes": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": {
+                          "type": "object",
+                          "required": ["path", "content"],
+                          "properties": {
+                            "path": { "type": "string" },
+                            "content": { "type": "string" }
+                          }
+                        }
+                      },
+                      "message": { "type": "string" },
+                      "branch": { "type": "string" },
+                      "dryRun": { "type": "boolean" }
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Apply result",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/dryRun": {
+      "post": {
+        "operationId": "dryRun",
+        "summary": "Preview a file change without committing.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Dry run preview",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Check service status and GitHub connectivity.",
+        "responses": {
+          "200": {
+            "description": "Health status including GitHub rate limit info",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/diagnose": {
+      "post": {
+        "operationId": "diagnoseRepo",
+        "summary": "Test connectivity and permissions for a specific repository. Runs checks on allowlist, auth, rate limits, repo access, branch name, and file access. Use this when reads fail to find out exactly why.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/agent-project-space" },
+                  "path": { "type": "string", "description": "File path to test. Defaults to README.md" },
+                  "branch": { "type": "string", "description": "Branch to test. Defaults to main" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diagnostic report with per-check results",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
