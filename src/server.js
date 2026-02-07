@@ -318,9 +318,6 @@ app.post('/apply', requireAuth, async (req, res) => {
       if (!isRepoAllowed(owner, repo)) {
         return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
       }
-      if (isRepoReadOnly(owner, repo)) {
-        return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Repository ${owner}/${repo} is configured as read-only` });
-      }
       for (const c of b.changes) {
         if (!c.path || typeof c.content !== 'string') {
           return badRequest(res, 'Each change must have path and content(string)');
@@ -330,10 +327,15 @@ app.post('/apply', requireAuth, async (req, res) => {
         }
       }
 
+      // Allow dry-run previews even on read-only repos (no GitHub writes occur)
       if (dryRun) {
         const { dryRunOneFile } = require('./github');
         const results = b.changes.map(c => dryRunOneFile({ owner, repo, branch, path: c.path, content: c.content, message }));
         return res.json({ ok: true, wouldApply: results.map(r => r.wouldApply) });
+      }
+
+      if (isRepoReadOnly(owner, repo)) {
+        return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Repository ${owner}/${repo} is configured as read-only` });
       }
 
       const { applyOneFile } = require('./github');
@@ -359,17 +361,18 @@ app.post('/apply', requireAuth, async (req, res) => {
       return forbidden(res, `Path ${path} is not in the allowlist`);
     }
 
+    // Allow dry-run previews even on read-only repos (no GitHub writes occur)
+    if (dryRun) {
+      const { dryRunOneFile } = require('./github');
+      return res.json(dryRunOneFile({ owner, repo, branch, path, content, message }));
+    }
+
     if (isRepoReadOnly(owner, repo)) {
       return res.status(403).json({
         ok: false,
         error: 'RepoReadOnly',
         message: `Repository ${owner}/${repo} is configured as read-only`
       });
-    }
-
-    if (dryRun) {
-      const { dryRunOneFile } = require('./github');
-      return res.json(dryRunOneFile({ owner, repo, branch, path, content, message }));
     }
 
     const { applyOneFile } = require('./github');
