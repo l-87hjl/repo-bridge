@@ -131,10 +131,23 @@ The most common error you will see is a **transport-layer failure** like `Client
 | Cause | Frequency | Fix |
 |-------|-----------|-----|
 | Render free-tier cold start | Common | Wait 30-60 seconds, retry |
+| GitHub App webhook failures | Common | Set webhook URL to `https://your-render-url/webhook` or disable webhooks entirely (see below) |
 | GitHub API rate limit (5,000/hr) | Occasional | Wait for reset; check `/health` |
 | Network blip between agent platform and Render | Occasional | Retry automatically (v0.4.0+) |
 | GitHub outage | Rare | Check https://githubstatus.com |
 | Render service sleeping (free tier) | Common | First request wakes it; retry after ~30s |
+
+### Fix: GitHub App Webhook Configuration
+
+If you see failed webhook deliveries in your GitHub App's **Advanced** tab (like `installation_repositories.added` with a warning icon), it means GitHub is trying to POST events to your app but the Render service is asleep.
+
+**Option A (Recommended):** In your GitHub App settings under **General**, set the Webhook URL to:
+```
+https://your-render-url.onrender.com/webhook
+```
+repo-bridge v0.4.0 includes a `/webhook` endpoint that acknowledges all events with HTTP 200, stopping the failed-delivery warnings.
+
+**Option B:** If you don't need webhooks at all (repo-bridge is pull-based), uncheck the "Active" checkbox under Webhook in your GitHub App settings. This stops GitHub from sending events entirely.
 
 ### What v0.4.0 does about it
 
