@@ -141,11 +141,15 @@ The most common error you will see is a **transport-layer failure** like `Client
 
 If you see failed webhook deliveries in your GitHub App's **Advanced** tab (like `installation_repositories.added` with a warning icon), it means GitHub is trying to POST events to your app but the Render service is asleep.
 
-**Option A (Recommended):** In your GitHub App settings under **General**, set the Webhook URL to:
+**Option A (Recommended):** In your GitHub App settings under **General**, set the Webhook URL to either:
 ```
-https://your-render-url.onrender.com/webhook
+https://repo-bridge.onrender.com/github/webhook
 ```
-repo-bridge v0.4.0 includes a `/webhook` endpoint that acknowledges all events with HTTP 200, stopping the failed-delivery warnings.
+or:
+```
+https://repo-bridge.onrender.com/webhook
+```
+Both paths work. repo-bridge v0.4.0 includes webhook endpoints that acknowledge all events with HTTP 200, stopping the failed-delivery warnings.
 
 **Option B:** If you don't need webhooks at all (repo-bridge is pull-based), uncheck the "Active" checkbox under Webhook in your GitHub App settings. This stops GitHub from sending events entirely.
 

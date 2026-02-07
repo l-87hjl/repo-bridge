@@ -929,7 +929,7 @@ function computeLCS(a, b) {
 // settings, GitHub will POST events here. We accept them gracefully to avoid
 // failed-delivery warnings in your App's Advanced tab.
 
-app.post('/webhook', (req, res) => {
+function handleWebhook(req, res) {
   const event = req.headers['x-github-event'] || 'unknown';
   const deliveryId = req.headers['x-github-delivery'] || 'unknown';
   log.info('Webhook received (acknowledged, not processed)', {
@@ -939,7 +939,11 @@ app.post('/webhook', (req, res) => {
   });
   // Return 200 so GitHub marks the delivery as successful
   res.status(200).json({ ok: true, event, message: 'Webhook acknowledged. repo-bridge is pull-based and does not process webhook events.' });
-});
+}
+
+// Accept webhooks at both paths — GitHub App is configured to POST to /github/webhook
+app.post('/webhook', handleWebhook);
+app.post('/github/webhook', handleWebhook);
 
 // ─── Catch-all and error handler ──────────────────────────────────────────────
 
