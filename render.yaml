@@ -22,5 +22,7 @@ services:
         sync: false
       - key: READ_ONLY_REPOS
         sync: false
+      - key: DEFAULT_BRANCH
+        value: main
       - key: LOG_LEVEL
         value: info
