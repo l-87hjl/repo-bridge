@@ -88,12 +88,10 @@ app.get('/health', async (req, res) => {
       };
     } catch (e) {
       health.github = { connected: false, error: e.message };
-      health.ok = false;
     }
   }
 
-  const statusCode = health.ok ? 200 : 503;
-  res.status(statusCode).json(health);
+  res.status(200).json(health);
 });
 
 function badRequest(res, message) {
