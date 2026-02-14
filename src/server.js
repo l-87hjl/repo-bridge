@@ -58,8 +58,13 @@ app.get('/', (req, res) => {
   res.json({
     service: 'repo-bridge',
     status: 'running',
-    version: '0.4.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    version: '0.5.0',
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    capabilities: {
+      patch: 'Incremental file changes via search-replace or unified diff (v0.5.0)',
+      appendMode: 'Append to files via /apply with mode:"append" (v0.5.0)',
+      shaGuard: 'Optimistic concurrency via expectedSha on /apply (v0.5.0)',
+    },
   });
 });
 
@@ -67,7 +72,7 @@ app.get('/health', async (req, res) => {
   const health = {
     ok: true,
     service: 'repo-bridge',
-    version: '0.4.0',
+    version: '0.5.0',
     time: new Date().toISOString(),
     uptime: process.uptime(),
   };
@@ -257,6 +262,8 @@ function normalizeApplyBody(body) {
         owner: b.owner, repo: b.repo, branch,
         path: c0.path, content: c0.content,
         message: b.message, installationId: b.installationId, dryRun: b.dryRun,
+        expectedSha: c0.expectedSha || b.expectedSha,
+        mode: c0.mode || b.mode,
       };
     }
     return {
@@ -270,6 +277,8 @@ function normalizeApplyBody(body) {
     owner: b.owner, repo: b.repo, branch,
     path: b.path, content: b.content,
     message: b.message, installationId: b.installationId, dryRun: b.dryRun,
+    expectedSha: b.expectedSha,
+    mode: b.mode,
   };
 }
 
@@ -336,11 +345,16 @@ app.post('/apply', requireAuth, async (req, res) => {
         return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Repository ${owner}/${repo} is configured as read-only` });
       }
 
-      const { applyOneFile } = require('./github');
+      const { applyOneFile, appendToFile } = require('./github');
       const results = [];
       for (const c of b.changes) {
-        const result = await applyOneFile({ owner, repo, branch, path: c.path, content: c.content, message, installationId });
-        results.push(result);
+        if (c.mode === 'append') {
+          const result = await appendToFile({ owner, repo, branch, path: c.path, content: c.content, separator: c.separator, message, installationId });
+          results.push(result);
+        } else {
+          const result = await applyOneFile({ owner, repo, branch, path: c.path, content: c.content, message, installationId, expectedSha: c.expectedSha });
+          results.push(result);
+        }
       }
       return res.json({ ok: true, results });
     }
@@ -373,11 +387,150 @@ app.post('/apply', requireAuth, async (req, res) => {
       });
     }
 
+    // Append mode: read existing content, append new content, write back
+    if (b.mode === 'append') {
+      const { appendToFile } = require('./github');
+      const result = await appendToFile({ owner, repo, branch, path, content, separator: b.separator, message, installationId });
+      return res.json(result);
+    }
+
     const { applyOneFile } = require('./github');
-    const result = await applyOneFile({ owner, repo, branch, path, content, message, installationId });
+    const result = await applyOneFile({ owner, repo, branch, path, content, message, installationId, expectedSha: b.expectedSha });
     return res.json({ ok: true, ...result });
   } catch (e) {
+    // Handle SHA guard conflicts
+    if (e.status === 409) {
+      return res.status(409).json({
+        ok: false,
+        error: 'ShaConflict',
+        message: e.message,
+        requestId: req.requestId,
+        hint: 'The file has been modified since you last read it. Re-read the file to get the current SHA, then retry.',
+      });
+    }
     return errorResponse(res, 500, 'ApplyFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /patch - Apply incremental changes to a file without full replacement.
+ *
+ * Supports two modes:
+ *   Mode 1 — Search-and-replace operations (recommended for AI agents):
+ *     { owner, repo, path, operations: [{ search, replace, replaceAll? }], message }
+ *
+ *   Mode 2 — Unified diff patch:
+ *     { owner, repo, path, patch: "@@ -1,3 +1,4 @@\n ...", message }
+ *
+ * Both modes read the file, apply changes, and commit the result.
+ * Dry-run supported via dryRun: true.
+ */
+app.post('/patch', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const message = b.message;
+    const installationId = b.installationId;
+    const operations = b.operations;
+    const patch = b.patch;
+    const dryRun = b.dryRun;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: owner, repo, path, message. Plus either operations[] or patch string.');
+    }
+    if (!operations && !patch) {
+      return badRequest(res, 'Provide either operations[] (search-and-replace) or patch (unified diff string).');
+    }
+    if (operations && patch) {
+      return badRequest(res, 'Provide either operations[] or patch, not both.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+
+    // Dry-run: read file, apply in-memory, return preview without committing
+    if (dryRun) {
+      const { readOneFile, applyUnifiedDiff } = require('./github');
+      const current = await readOneFile({ owner, repo, branch, path, installationId });
+      let previewContent = current.content;
+      const previewOps = [];
+
+      if (operations && Array.isArray(operations)) {
+        for (let i = 0; i < operations.length; i++) {
+          const op = operations[i];
+          const before = previewContent;
+          if (op.replaceAll) {
+            previewContent = previewContent.split(op.search).join(op.replace);
+          } else {
+            const idx = previewContent.indexOf(op.search);
+            if (idx === -1) {
+              return res.status(409).json({
+                ok: false, error: 'PatchConflict',
+                message: `Operation ${i}: search string not found in file`,
+                requestId: req.requestId,
+              });
+            }
+            previewContent = previewContent.substring(0, idx) + op.replace + previewContent.substring(idx + op.search.length);
+          }
+          previewOps.push({ index: i, applied: before !== previewContent });
+        }
+      } else {
+        const result = applyUnifiedDiff(previewContent, patch);
+        if (!result.ok) {
+          return res.status(409).json({
+            ok: false, error: 'PatchConflict',
+            message: result.error,
+            requestId: req.requestId,
+          });
+        }
+        previewContent = result.content;
+        previewOps.push({ type: 'unified_diff', hunksApplied: result.hunksApplied });
+      }
+
+      return res.json({
+        ok: true,
+        dryRun: true,
+        owner, repo, branch, path,
+        changed: previewContent !== current.content,
+        previousSize: Buffer.byteLength(current.content, 'utf8'),
+        newSize: Buffer.byteLength(previewContent, 'utf8'),
+        operations: previewOps,
+        preview: previewContent,
+      });
+    }
+
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        ok: false, error: 'RepoReadOnly',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { patchOneFile } = require('./github');
+    const result = await patchOneFile({ owner, repo, branch, path, operations, patch, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 409) {
+      return res.status(409).json({
+        ok: false, error: 'PatchConflict',
+        message: e.message,
+        requestId: req.requestId,
+        hint: 'The patch could not be applied. The file content may have changed since the patch was created. Re-read the file and try again.',
+      });
+    }
+    if (e.status === 400) {
+      return badRequest(res, e.message);
+    }
+    if (e.status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found', requestId: req.requestId });
+    }
+    return errorResponse(res, 500, 'PatchFailed', e, { requestId: req.requestId });
   }
 });
 

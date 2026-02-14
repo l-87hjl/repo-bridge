@@ -159,8 +159,10 @@ async function getExistingFileSha(octokit, { owner, repo, path, branch }) {
 
 /**
  * Apply (create/update) exactly one file on a repo/branch.
+ * If expectedSha is provided, verifies the file's current SHA matches before writing.
+ * This prevents accidental overwrites if the file changed since it was last read.
  */
-async function applyOneFile({ owner, repo, branch, path, content, message, installationId }) {
+async function applyOneFile({ owner, repo, branch, path, content, message, installationId, expectedSha }) {
   const context = { operation: 'applyOneFile', owner, repo, branch, path };
   log.info('Applying file', context);
   const startMs = Date.now();
@@ -171,6 +173,21 @@ async function applyOneFile({ owner, repo, branch, path, content, message, insta
     () => getExistingFileSha(octokit, { owner, repo, path, branch }),
     { ...context, step: 'getExistingFileSha' }
   );
+
+  // SHA guard: if expectedSha is provided, verify it matches the current file SHA
+  if (expectedSha) {
+    if (!sha) {
+      const err = new Error(`SHA guard failed: file does not exist but expectedSha was provided (${expectedSha}). The file may have been deleted.`);
+      err.status = 409;
+      throw err;
+    }
+    if (sha !== expectedSha) {
+      const err = new Error(`SHA guard failed: file has been modified since last read. Expected SHA ${expectedSha}, found ${sha}. Re-read the file and try again.`);
+      err.status = 409;
+      throw err;
+    }
+    log.debug('SHA guard passed', { ...context, expectedSha, currentSha: sha });
+  }
 
   const r = await withRetry(
     () => octokit.rest.repos.createOrUpdateFileContents({
@@ -190,6 +207,7 @@ async function applyOneFile({ owner, repo, branch, path, content, message, insta
     owner, repo, branch, path,
     created: !sha,
     updated: !!sha,
+    previousSha: sha || null,
     commitSha: r?.data?.commit?.sha || null,
     contentSha: r?.data?.content?.sha || null,
   };
@@ -322,14 +340,274 @@ async function listTree({ owner, repo, branch, path, installationId, _retryOnAut
   };
 }
 
+/**
+ * Patch a file in-place: read current content, apply operations, write result.
+ * Supports two modes:
+ *   1. Search-and-replace operations: [{ search, replace, replaceAll? }]
+ *   2. Unified diff patch string
+ *
+ * Returns commit info plus a summary of what changed.
+ */
+async function patchOneFile({ owner, repo, branch, path, operations, patch, message, installationId }) {
+  const context = { operation: 'patchOneFile', owner, repo, branch, path };
+  log.info('Patching file', context);
+  const startMs = Date.now();
+
+  // Read the current file
+  const current = await readOneFile({ owner, repo, branch, path, installationId });
+  let content = current.content;
+  const originalContent = content;
+  const appliedOps = [];
+
+  if (operations && Array.isArray(operations)) {
+    // Mode 1: Search-and-replace operations
+    for (let i = 0; i < operations.length; i++) {
+      const op = operations[i];
+      if (!op.search || typeof op.search !== 'string') {
+        const err = new Error(`Operation ${i}: 'search' must be a non-empty string`);
+        err.status = 400;
+        throw err;
+      }
+      if (typeof op.replace !== 'string') {
+        const err = new Error(`Operation ${i}: 'replace' must be a string`);
+        err.status = 400;
+        throw err;
+      }
+
+      const before = content;
+      if (op.replaceAll) {
+        content = content.split(op.search).join(op.replace);
+      } else {
+        const idx = content.indexOf(op.search);
+        if (idx === -1) {
+          const err = new Error(`Operation ${i}: search string not found in file. Search: ${JSON.stringify(op.search.substring(0, 100))}${op.search.length > 100 ? '...' : ''}`);
+          err.status = 409;
+          throw err;
+        }
+        content = content.substring(0, idx) + op.replace + content.substring(idx + op.search.length);
+      }
+
+      const changed = before !== content;
+      appliedOps.push({
+        index: i,
+        applied: changed,
+        searchLength: op.search.length,
+        replaceLength: op.replace.length,
+      });
+    }
+  } else if (patch && typeof patch === 'string') {
+    // Mode 2: Unified diff patch
+    const patchResult = applyUnifiedDiff(content, patch);
+    if (!patchResult.ok) {
+      const err = new Error(`Patch failed: ${patchResult.error}`);
+      err.status = 409;
+      throw err;
+    }
+    content = patchResult.content;
+    appliedOps.push({ type: 'unified_diff', hunksApplied: patchResult.hunksApplied });
+  } else {
+    const err = new Error('Provide either operations[] (search-and-replace) or patch (unified diff string)');
+    err.status = 400;
+    throw err;
+  }
+
+  if (content === originalContent) {
+    const durationMs = Date.now() - startMs;
+    log.info('Patch resulted in no changes', { ...context, durationMs });
+    return {
+      ok: true,
+      committed: false,
+      noChange: true,
+      owner, repo, branch, path,
+      message: 'Patch produced no changes to file content',
+      operations: appliedOps,
+    };
+  }
+
+  // Write the patched content
+  const octokit = await getInstallationOctokit({ installationId });
+  const sha = current.sha;
+
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(content, 'utf8').toString('base64'),
+      branch,
+      ...(sha ? { sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('File patched successfully', { ...context, durationMs });
+
+  return {
+    ok: true,
+    committed: true,
+    owner, repo, branch, path,
+    previousSha: current.sha,
+    commitSha: r?.data?.commit?.sha || null,
+    contentSha: r?.data?.content?.sha || null,
+    operations: appliedOps,
+  };
+}
+
+/**
+ * Apply a unified diff patch to file content.
+ * Supports standard unified diff format with @@ hunk headers.
+ * Verifies context lines match for safety.
+ */
+function applyUnifiedDiff(content, patch) {
+  const lines = content.split('\n');
+  const patchLines = patch.split('\n');
+  let hunksApplied = 0;
+
+  // Parse hunks from the patch
+  const hunks = [];
+  let currentHunk = null;
+
+  for (const pline of patchLines) {
+    // Skip file headers (--- a/file, +++ b/file)
+    if (pline.startsWith('--- ') || pline.startsWith('+++ ') || pline.startsWith('diff ') || pline.startsWith('index ')) {
+      continue;
+    }
+
+    const hunkMatch = pline.match(/^@@\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/);
+    if (hunkMatch) {
+      if (currentHunk) hunks.push(currentHunk);
+      currentHunk = {
+        oldStart: parseInt(hunkMatch[1], 10),
+        oldCount: hunkMatch[2] !== undefined ? parseInt(hunkMatch[2], 10) : 1,
+        newStart: parseInt(hunkMatch[3], 10),
+        newCount: hunkMatch[4] !== undefined ? parseInt(hunkMatch[4], 10) : 1,
+        lines: [],
+      };
+      continue;
+    }
+
+    if (currentHunk) {
+      if (pline.startsWith('+') || pline.startsWith('-') || pline.startsWith(' ') || pline === '') {
+        currentHunk.lines.push(pline);
+      }
+    }
+  }
+  if (currentHunk) hunks.push(currentHunk);
+
+  if (hunks.length === 0) {
+    return { ok: false, error: 'No valid hunks found in patch. Expected @@ -start,count +start,count @@ format.' };
+  }
+
+  // Apply hunks in reverse order so line numbers stay valid
+  const result = [...lines];
+  const reversedHunks = [...hunks].reverse();
+
+  for (const hunk of reversedHunks) {
+    const startIdx = hunk.oldStart - 1; // Convert 1-based to 0-based
+
+    // Verify context lines match
+    const oldLines = [];
+    const newLines = [];
+
+    for (const hl of hunk.lines) {
+      if (hl.startsWith('-')) {
+        oldLines.push(hl.substring(1));
+      } else if (hl.startsWith('+')) {
+        newLines.push(hl.substring(1));
+      } else if (hl.startsWith(' ')) {
+        oldLines.push(hl.substring(1));
+        newLines.push(hl.substring(1));
+      } else if (hl === '') {
+        // Empty line in diff = context empty line
+        oldLines.push('');
+        newLines.push('');
+      }
+    }
+
+    // Verify old lines match current content
+    for (let i = 0; i < oldLines.length; i++) {
+      const lineIdx = startIdx + i;
+      if (lineIdx >= result.length) {
+        return { ok: false, error: `Hunk at line ${hunk.oldStart}: file has ${result.length} lines but hunk expects line ${lineIdx + 1}` };
+      }
+      if (result[lineIdx] !== oldLines[i]) {
+        return {
+          ok: false,
+          error: `Context mismatch at line ${lineIdx + 1}: expected ${JSON.stringify(oldLines[i])}, found ${JSON.stringify(result[lineIdx])}. File may have changed since patch was created.`,
+        };
+      }
+    }
+
+    // Apply: replace old lines with new lines
+    result.splice(startIdx, oldLines.length, ...newLines);
+    hunksApplied++;
+  }
+
+  return { ok: true, content: result.join('\n'), hunksApplied };
+}
+
+/**
+ * Append content to an existing file (or create with content if new).
+ * Reads current content, appends new content, writes back.
+ */
+async function appendToFile({ owner, repo, branch, path, content, separator, message, installationId }) {
+  const context = { operation: 'appendToFile', owner, repo, branch, path };
+  log.info('Appending to file', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+  let existingContent = '';
+  let sha = null;
+
+  // Try to read existing file
+  try {
+    const current = await readOneFile({ owner, repo, branch, path, installationId });
+    existingContent = current.content;
+    sha = current.sha;
+  } catch (e) {
+    if (e.status !== 404) throw e;
+    // File doesn't exist yet — will create it
+  }
+
+  const sep = typeof separator === 'string' ? separator : '\n';
+  const newContent = existingContent ? existingContent + sep + content : content;
+
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(newContent, 'utf8').toString('base64'),
+      branch,
+      ...(sha ? { sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('File appended successfully', { ...context, durationMs, created: !sha });
+
+  return {
+    ok: true,
+    committed: true,
+    owner, repo, branch, path,
+    created: !sha,
+    appended: !!sha,
+    previousSize: Buffer.byteLength(existingContent, 'utf8'),
+    newSize: Buffer.byteLength(newContent, 'utf8'),
+    commitSha: r?.data?.commit?.sha || null,
+    contentSha: r?.data?.content?.sha || null,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
   dryRunOneFile,
   readOneFile,
   listTree,
+  patchOneFile,
+  appendToFile,
   invalidateTokenCache,
   // Exported for testing
   isTransientError,
   withRetry,
+  applyUnifiedDiff,
 };

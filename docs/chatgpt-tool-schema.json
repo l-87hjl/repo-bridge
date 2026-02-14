@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "repo-bridge",
-    "version": "1.6.0"
+    "version": "2.0.0"
   },
   "servers": [
     {
@@ -256,8 +256,8 @@
     "/apply": {
       "post": {
         "operationId": "writeFile",
-        "summary": "Write a file to GitHub. Creates or updates a file with the content you provide, creating a real Git commit. To write custom content to a new or existing file, use this endpoint — do NOT use /copy for that purpose.",
-        "description": "This is the primary endpoint for creating files with new content. You MUST provide the full file content as a string in the content field. The /copy endpoint is only for duplicating an existing file from one repo to another — never use /copy when you have content to write.",
+        "summary": "Write a file to GitHub. Creates or updates a file with the content you provide, creating a real Git commit. Supports SHA guard for safe writes and append mode. For partial changes, use /patch instead.",
+        "description": "Primary endpoint for creating files with new content. Provide full file content in the content field. Supports expectedSha for optimistic concurrency (prevents overwrites if file changed) and mode:'append' to add content without replacing. The /copy endpoint is only for duplicating an existing file — never use /copy when you have content to write. For incremental changes (search-replace or diffs), use /patch instead.",
         "requestBody": {
           "required": true,
           "content": {
@@ -268,9 +268,12 @@
                 "properties": {
                   "repo": { "type": "string", "description": "Repository in owner/repo format, e.g. l-87hjl/alexandria-scribe" },
                   "path": { "type": "string", "description": "File path to create or update, e.g. docs/CHECKLIST.md" },
-                  "content": { "type": "string", "description": "The complete file content to write as a string. For markdown, include the full markdown text. For JSON, include the full JSON string." },
+                  "content": { "type": "string", "description": "The complete file content to write (or content to append if mode is 'append')" },
                   "message": { "type": "string", "description": "Git commit message describing what was written and why" },
-                  "branch": { "type": "string", "description": "Target branch. Defaults to main." }
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
+                  "expectedSha": { "type": "string", "description": "SHA from a previous /read response. If provided, write will fail with 409 if the file has changed since that read. Use for safe overwrites." },
+                  "mode": { "type": "string", "enum": ["append"], "description": "Set to 'append' to add content to end of file instead of replacing it." },
+                  "separator": { "type": "string", "description": "Separator between existing and appended content. Defaults to newline. Only used with mode:'append'." }
                 }
               }
             }
@@ -279,6 +282,71 @@
         "responses": {
           "200": {
             "description": "File written successfully. Returns commit SHA and file metadata.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          },
+          "409": {
+            "description": "SHA conflict — file was modified since last read. Re-read and retry.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patch": {
+      "post": {
+        "operationId": "patchFile",
+        "summary": "Apply incremental changes to a file without full replacement. Reads the file, applies search-and-replace operations or a unified diff, then commits the result. Safer than /apply for partial modifications.",
+        "description": "Use this endpoint to make targeted changes to a file. Mode 1 (recommended): provide operations[] with search/replace pairs. Mode 2: provide a unified diff patch string. The file is read first, changes are applied, and the result is committed. If a search string is not found or diff context doesn't match, the request fails with 409 instead of corrupting the file.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "path": { "type": "string", "description": "File path to patch" },
+                  "message": { "type": "string", "description": "Git commit message" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
+                  "operations": {
+                    "type": "array",
+                    "description": "Search-and-replace operations. Provide this OR patch, not both.",
+                    "items": {
+                      "type": "object",
+                      "required": ["search", "replace"],
+                      "properties": {
+                        "search": { "type": "string", "description": "Exact string to find in the file" },
+                        "replace": { "type": "string", "description": "String to replace it with" },
+                        "replaceAll": { "type": "boolean", "description": "Replace all occurrences. Default: false (first only)." }
+                      }
+                    }
+                  },
+                  "patch": { "type": "string", "description": "Unified diff string. Provide this OR operations, not both." },
+                  "dryRun": { "type": "boolean", "description": "Preview changes without committing. Returns the would-be result." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Patch applied and committed. Returns commit SHA and operation details.",
+            "content": {
+              "application/json": {
+                "schema": { "type": "object" }
+              }
+            }
+          },
+          "409": {
+            "description": "Patch conflict — search string not found or diff context mismatch. Re-read the file and adjust.",
             "content": {
               "application/json": {
                 "schema": { "type": "object" }
