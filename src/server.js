@@ -93,10 +93,12 @@ app.get('/health', async (req, res) => {
       };
     } catch (e) {
       health.github = { connected: false, error: e.message };
+      health.ok = false;
     }
   }
 
-  res.status(200).json(health);
+  const statusCode = health.ok ? 200 : 503;
+  res.status(statusCode).json(health);
 });
 
 function badRequest(res, message) {
