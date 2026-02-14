@@ -254,6 +254,17 @@ When `dryRun: true`:
 }
 ```
 
+*409 SHA Conflict* - File changed since last read (when `expectedSha` is provided):
+
+```json
+{
+  "ok": false,
+  "error": "ShaConflict",
+  "message": "SHA guard failed: file has been modified since last read. Expected SHA abc123, found def456.",
+  "hint": "The file has been modified since you last read it. Re-read the file to get the current SHA, then retry."
+}
+```
+
 *500 Server Error* - GitHub API or authentication error:
 
 ```json
@@ -261,6 +272,188 @@ When `dryRun: true`:
   "ok": false,
   "error": "ApplyFailed",
   "message": "Error message details"
+}
+```
+
+#### SHA Guard (Optimistic Concurrency)
+
+Prevent accidental overwrites by including the `expectedSha` from your last `/read` response:
+
+```json
+{
+  "repo": "myuser/myrepo",
+  "path": "config.json",
+  "content": "{\"key\": \"updated\"}",
+  "message": "Update config",
+  "expectedSha": "abc123def456..."
+}
+```
+
+If the file was modified by another process between your read and write, the request returns `409 ShaConflict` instead of overwriting.
+
+Safe workflow:
+1. `POST /read` → get `sha` from response
+2. Modify content locally
+3. `POST /apply` with `expectedSha: sha` → guaranteed safe write
+
+#### Append Mode
+
+Add content to the end of a file without replacing existing content:
+
+```json
+{
+  "repo": "myuser/myrepo",
+  "path": "log.txt",
+  "content": "New log entry",
+  "message": "Append log entry",
+  "mode": "append",
+  "separator": "\n"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `mode` | string | Yes | Set to `"append"` to enable append mode |
+| `separator` | string | No | String inserted between existing and new content (defaults to `"\n"`) |
+
+If the file does not exist, it will be created with just the new content.
+
+Append mode is also supported in multi-file writes via `changes[]`:
+
+```json
+{
+  "repo": "myuser/myrepo",
+  "message": "Add entries",
+  "changes": [
+    { "path": "log.txt", "content": "Entry 1", "mode": "append" },
+    { "path": "data.csv", "content": "row1,row2", "mode": "append", "separator": "\n" }
+  ]
+}
+```
+
+---
+
+### POST /patch
+
+Apply incremental changes to a file without full replacement. Reads the current file, applies changes, and commits the result. This is the safest way to make partial file modifications.
+
+Supports two modes:
+
+#### Mode 1: Search-and-Replace (Recommended for AI agents)
+
+```json
+{
+  "repo": "myuser/myrepo",
+  "path": "src/server.js",
+  "operations": [
+    {
+      "search": "const PORT = 3000;",
+      "replace": "const PORT = process.env.PORT || 3000;"
+    },
+    {
+      "search": "console.log('debug')",
+      "replace": "",
+      "replaceAll": true
+    }
+  ],
+  "message": "Make port configurable and remove debug logs"
+}
+```
+
+Each operation:
+- Finds the exact `search` string in the file
+- Replaces it with `replace`
+- If `replaceAll: true`, replaces all occurrences (otherwise first only)
+- Operations are applied sequentially
+- If `search` is not found, the request fails with `409 PatchConflict`
+
+#### Mode 2: Unified Diff
+
+```json
+{
+  "repo": "myuser/myrepo",
+  "path": "src/app.js",
+  "patch": "@@ -10,3 +10,4 @@\n const express = require('express');\n-const port = 3000;\n+const port = process.env.PORT || 3000;\n+const host = '0.0.0.0';\n",
+  "message": "Make server configurable"
+}
+```
+
+Standard unified diff format with `@@ -start,count +start,count @@` hunk headers.
+Context lines are verified for safety — if the file has changed since the diff was created, the patch fails instead of corrupting the file.
+
+**Parameters**
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `owner` | string | Yes* | Repository owner |
+| `repo` | string | Yes | Repository name (or `owner/repo`) |
+| `path` | string | Yes | File path to patch |
+| `operations` | array | Yes** | Search-and-replace operations |
+| `patch` | string | Yes** | Unified diff string |
+| `message` | string | Yes | Commit message |
+| `branch` | string | No | Target branch (defaults to `main`) |
+| `dryRun` | boolean | No | Preview without committing |
+| `installationId` | number | No | GitHub App installation ID |
+
+*`owner` is optional if `repo` is in `owner/repo` format.
+**Provide either `operations` or `patch`, not both.
+
+**Success Response (200)**
+
+```json
+{
+  "ok": true,
+  "committed": true,
+  "owner": "myuser",
+  "repo": "myrepo",
+  "branch": "main",
+  "path": "src/server.js",
+  "previousSha": "abc123...",
+  "commitSha": "def456...",
+  "contentSha": "ghi789...",
+  "operations": [
+    { "index": 0, "applied": true, "searchLength": 20, "replaceLength": 42 }
+  ]
+}
+```
+
+**No-Change Response (200)**
+
+If the patch produces identical content (e.g., replacing a string with itself):
+
+```json
+{
+  "ok": true,
+  "committed": false,
+  "noChange": true,
+  "message": "Patch produced no changes to file content"
+}
+```
+
+**Dry-Run Response (200)**
+
+```json
+{
+  "ok": true,
+  "dryRun": true,
+  "changed": true,
+  "previousSize": 1234,
+  "newSize": 1256,
+  "preview": "full file content after patch...",
+  "operations": [{ "index": 0, "applied": true }]
+}
+```
+
+**Error Responses**
+
+*409 PatchConflict* - Search string not found or context mismatch:
+
+```json
+{
+  "ok": false,
+  "error": "PatchConflict",
+  "message": "Operation 0: search string not found in file",
+  "hint": "The patch could not be applied. The file content may have changed since the patch was created. Re-read the file and try again."
 }
 ```
 
@@ -529,9 +722,12 @@ Multi-file (with `changes[]`):
 | 403 | Forbidden | Repository or path not in allowlist |
 | 403 | RepoReadOnly | Repository is configured as read-only |
 | 404 | NotFound | Unknown endpoint or file not found |
+| 409 | ShaConflict | File SHA mismatch (expectedSha guard failed) |
+| 409 | PatchConflict | Patch could not be applied (search not found / context mismatch) |
 | 500 | ServerError | Internal server error |
 | 500 | ApplyFailed | GitHub API call failed (write) |
 | 500 | ReadFailed | GitHub API call failed (read) |
+| 500 | PatchFailed | Patch operation failed |
 | 500 | CopyFailed | Cross-repo copy operation failed |
 | 500 | BatchReadFailed | Batch read operation failed |
 | 500 | ListFailed | Directory listing failed |
@@ -594,6 +790,55 @@ curl -X POST http://localhost:3000/github/dryrun \
     "content": "Hello, World!",
     "message": "Add hello.txt"
   }'
+```
+
+**Patch a file (search-and-replace):**
+
+```bash
+curl -X POST http://localhost:3000/patch \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "myuser/myrepo",
+    "path": "src/config.js",
+    "operations": [
+      { "search": "port: 3000", "replace": "port: 8080" }
+    ],
+    "message": "Change default port to 8080"
+  }'
+```
+
+**Append to a file:**
+
+```bash
+curl -X POST http://localhost:3000/apply \
+  -H "Content-Type: application/json" \
+  -d '{
+    "repo": "myuser/myrepo",
+    "path": "CHANGELOG.md",
+    "content": "\n## v1.1.0\n- Added new feature",
+    "message": "Update changelog",
+    "mode": "append"
+  }'
+```
+
+**Safe write with SHA guard:**
+
+```bash
+# Step 1: Read the file and note the SHA
+SHA=$(curl -s -X POST http://localhost:3000/read \
+  -H "Content-Type: application/json" \
+  -d '{"repo": "myuser/myrepo", "path": "config.json"}' | jq -r '.sha')
+
+# Step 2: Write with SHA guard
+curl -X POST http://localhost:3000/apply \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"repo\": \"myuser/myrepo\",
+    \"path\": \"config.json\",
+    \"content\": \"{\\\"updated\\\": true}\",
+    \"message\": \"Update config\",
+    \"expectedSha\": \"$SHA\"
+  }"
 ```
 
 ### Using JavaScript (fetch)
