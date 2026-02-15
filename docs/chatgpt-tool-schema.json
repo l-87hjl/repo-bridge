@@ -356,6 +356,135 @@
         }
       }
     },
+    "/patchReplace": {
+      "post": {
+        "operationId": "patchReplaceFile",
+        "summary": "Apply search-and-replace operations to a file. Reads the file, applies each operation sequentially, and commits the result.",
+        "description": "Targeted search-and-replace on a single file. Provide an array of operations, each with a search string and its replacement. Operations are applied in order. If a search string is not found, the request fails with 409.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "operations"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "path": { "type": "string", "description": "File path to patch" },
+                  "message": { "type": "string", "description": "Git commit message" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
+                  "operations": {
+                    "type": "array",
+                    "description": "Search-and-replace operations applied sequentially.",
+                    "items": {
+                      "type": "object",
+                      "required": ["search", "replace"],
+                      "properties": {
+                        "search": { "type": "string", "description": "Exact string to find in the file" },
+                        "replace": { "type": "string", "description": "String to replace it with" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Patch applied and committed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "committed": { "type": "boolean" },
+                    "commitSha": { "type": "string" },
+                    "path": { "type": "string" },
+                    "branch": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — search string not found. Re-read the file and adjust.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "error": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/patchDiff": {
+      "post": {
+        "operationId": "patchDiffFile",
+        "summary": "Apply a unified diff patch to a file. Reads the file, applies the diff, and commits the result.",
+        "description": "Apply a unified diff (with @@ hunk headers) to a single file. Context lines are verified before applying. If context does not match, the request fails with 409.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "patch"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "path": { "type": "string", "description": "File path to patch" },
+                  "message": { "type": "string", "description": "Git commit message" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
+                  "patch": { "type": "string", "description": "Unified diff string with @@ hunk headers" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Diff applied and committed successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "committed": { "type": "boolean" },
+                    "commitSha": { "type": "string" },
+                    "path": { "type": "string" },
+                    "branch": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict — diff context mismatch. Re-read the file and regenerate the diff.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "error": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "operationId": "healthCheck",
