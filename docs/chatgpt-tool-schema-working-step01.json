@@ -1,0 +1,246 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "repo-bridge",
+    "version": "2.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://repo-bridge.onrender.com"
+    }
+  ],
+  "paths": {
+    "/list": {
+      "post": {
+        "operationId": "listDirectory",
+        "summary": "List files and directories in a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Directory listing" }
+        }
+      }
+    },
+
+    "/read": {
+      "post": {
+        "operationId": "readFile",
+        "summary": "Read a single file from a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File contents" }
+        }
+      }
+    },
+
+    "/batchRead": {
+      "post": {
+        "operationId": "batchRead",
+        "summary": "Read multiple files from one or more repositories.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["files"],
+                "properties": {
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["repo", "path"],
+                      "properties": {
+                        "repo": { "type": "string" },
+                        "path": { "type": "string" },
+                        "branch": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Batch read results" }
+        }
+      }
+    },
+
+    "/compare": {
+      "post": {
+        "operationId": "compareFiles",
+        "summary": "Compare a file between two repositories or branches.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo", "path"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Comparison result" }
+        }
+      }
+    },
+
+    "/compareStructure": {
+      "post": {
+        "operationId": "compareStructure",
+        "summary": "Compare directory structures between two repositories.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["source", "target"],
+                "properties": {
+                  "source": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  },
+                  "target": {
+                    "type": "object",
+                    "required": ["repo"],
+                    "properties": {
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
+                      "branch": { "type": "string" }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Structure comparison result" }
+        }
+      }
+    },
+
+    "/apply": {
+      "post": {
+        "operationId": "writeFile",
+        "summary": "Create or update a file in a GitHub repository.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File written successfully" }
+        }
+      }
+    },
+
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Check service status.",
+        "responses": {
+          "200": { "description": "Service status" }
+        }
+      }
+    },
+
+    "/diagnose": {
+      "post": {
+        "operationId": "diagnoseRepo",
+        "summary": "Run repository diagnostics.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Diagnostic report" }
+        }
+      }
+    }
+  }
+}
