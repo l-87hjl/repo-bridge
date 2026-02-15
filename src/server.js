@@ -59,9 +59,11 @@ app.get('/', (req, res) => {
     service: 'repo-bridge',
     status: 'running',
     version: '0.5.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
     capabilities: {
-      patch: 'Incremental file changes via search-replace or unified diff (v0.5.0)',
+      patchReplace: 'Search-and-replace file patching via /patchReplace — flat schema, GPT Actions safe (v0.5.0)',
+      patchDiff: 'Unified diff file patching via /patchDiff — flat schema, GPT Actions safe (v0.5.0)',
+      patch: 'Legacy combined patch endpoint via /patch — supports both modes (v0.5.0)',
       appendMode: 'Append to files via /apply with mode:"append" (v0.5.0)',
       shaGuard: 'Optimistic concurrency via expectedSha on /apply (v0.5.0)',
     },
@@ -533,6 +535,122 @@ app.post('/patch', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found', requestId: req.requestId });
     }
     return errorResponse(res, 500, 'PatchFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /patchReplace - Apply search-and-replace operations to a file.
+ *
+ * Single-purpose endpoint (GPT Actions safe): accepts only operations[].
+ * No conditional input, no optional flags, flat deterministic schema.
+ *
+ * Input: { repo, path, message, operations: [{ search, replace }], branch? }
+ */
+app.post('/patchReplace', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const message = b.message;
+    const installationId = b.installationId;
+    const operations = b.operations;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, message, operations[].');
+    }
+    if (!operations || !Array.isArray(operations) || operations.length === 0) {
+      return badRequest(res, 'operations[] must be a non-empty array of { search, replace } objects.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { patchReplace } = require('./github');
+    const result = await patchReplace({ owner, repo, branch, path, operations, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 409) {
+      return res.status(409).json({
+        success: false, error: 'conflict',
+        message: e.message,
+      });
+    }
+    if (e.status === 400) {
+      return badRequest(res, e.message);
+    }
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    return errorResponse(res, 500, 'PatchReplaceFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /patchDiff - Apply a unified diff patch to a file.
+ *
+ * Single-purpose endpoint (GPT Actions safe): accepts only a patch string.
+ * No conditional input, no optional flags, flat deterministic schema.
+ *
+ * Input: { repo, path, message, patch: "<unified diff>", branch? }
+ */
+app.post('/patchDiff', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const message = b.message;
+    const installationId = b.installationId;
+    const patch = b.patch;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, message, patch.');
+    }
+    if (!patch || typeof patch !== 'string') {
+      return badRequest(res, 'patch must be a non-empty string containing a unified diff.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { patchDiff } = require('./github');
+    const result = await patchDiff({ owner, repo, branch, path, patch, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 409) {
+      return res.status(409).json({
+        success: false, error: 'conflict',
+        message: e.message,
+      });
+    }
+    if (e.status === 400) {
+      return badRequest(res, e.message);
+    }
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    return errorResponse(res, 500, 'PatchDiffFailed', e, { requestId: req.requestId });
   }
 });
 

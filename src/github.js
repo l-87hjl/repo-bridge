@@ -361,40 +361,9 @@ async function patchOneFile({ owner, repo, branch, path, operations, patch, mess
 
   if (operations && Array.isArray(operations)) {
     // Mode 1: Search-and-replace operations
-    for (let i = 0; i < operations.length; i++) {
-      const op = operations[i];
-      if (!op.search || typeof op.search !== 'string') {
-        const err = new Error(`Operation ${i}: 'search' must be a non-empty string`);
-        err.status = 400;
-        throw err;
-      }
-      if (typeof op.replace !== 'string') {
-        const err = new Error(`Operation ${i}: 'replace' must be a string`);
-        err.status = 400;
-        throw err;
-      }
-
-      const before = content;
-      if (op.replaceAll) {
-        content = content.split(op.search).join(op.replace);
-      } else {
-        const idx = content.indexOf(op.search);
-        if (idx === -1) {
-          const err = new Error(`Operation ${i}: search string not found in file. Search: ${JSON.stringify(op.search.substring(0, 100))}${op.search.length > 100 ? '...' : ''}`);
-          err.status = 409;
-          throw err;
-        }
-        content = content.substring(0, idx) + op.replace + content.substring(idx + op.search.length);
-      }
-
-      const changed = before !== content;
-      appliedOps.push({
-        index: i,
-        applied: changed,
-        searchLength: op.search.length,
-        replaceLength: op.replace.length,
-      });
-    }
+    const result = applySearchReplace(content, operations);
+    content = result.content;
+    appliedOps.push(...result.operations);
   } else if (patch && typeof patch === 'string') {
     // Mode 2: Unified diff patch
     const patchResult = applyUnifiedDiff(content, patch);
@@ -449,6 +418,143 @@ async function patchOneFile({ owner, repo, branch, path, operations, patch, mess
     commitSha: r?.data?.commit?.sha || null,
     contentSha: r?.data?.content?.sha || null,
     operations: appliedOps,
+  };
+}
+
+/**
+ * Pure search-and-replace engine. Applies operations[] to content string.
+ * Returns { content, operations } or throws on validation/conflict.
+ */
+function applySearchReplace(content, operations) {
+  const appliedOps = [];
+  for (let i = 0; i < operations.length; i++) {
+    const op = operations[i];
+    if (!op.search || typeof op.search !== 'string') {
+      const err = new Error(`Operation ${i}: 'search' must be a non-empty string`);
+      err.status = 400;
+      throw err;
+    }
+    if (typeof op.replace !== 'string') {
+      const err = new Error(`Operation ${i}: 'replace' must be a string`);
+      err.status = 400;
+      throw err;
+    }
+
+    const before = content;
+    if (op.replaceAll) {
+      content = content.split(op.search).join(op.replace);
+    } else {
+      const idx = content.indexOf(op.search);
+      if (idx === -1) {
+        const err = new Error(`Operation ${i}: search string not found in file. Search: ${JSON.stringify(op.search.substring(0, 100))}${op.search.length > 100 ? '...' : ''}`);
+        err.status = 409;
+        throw err;
+      }
+      content = content.substring(0, idx) + op.replace + content.substring(idx + op.search.length);
+    }
+
+    appliedOps.push({
+      index: i,
+      applied: before !== content,
+      searchLength: op.search.length,
+      replaceLength: op.replace.length,
+    });
+  }
+  return { content, operations: appliedOps };
+}
+
+/**
+ * Single-purpose: apply search-and-replace operations, read file, commit result.
+ * No conditional input — accepts only operations[].
+ */
+async function patchReplace({ owner, repo, branch, path, operations, message, installationId }) {
+  const context = { operation: 'patchReplace', owner, repo, branch, path };
+  log.info('Applying search-and-replace patch', context);
+  const startMs = Date.now();
+
+  const current = await readOneFile({ owner, repo, branch, path, installationId });
+  const result = applySearchReplace(current.content, operations);
+
+  if (result.content === current.content) {
+    const durationMs = Date.now() - startMs;
+    log.info('Patch resulted in no changes', { ...context, durationMs });
+    return {
+      success: true,
+      committed: false,
+      path, branch,
+      message: 'Patch produced no changes to file content',
+    };
+  }
+
+  const octokit = await getInstallationOctokit({ installationId });
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(result.content, 'utf8').toString('base64'),
+      branch,
+      ...(current.sha ? { sha: current.sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('Search-and-replace patch committed', { ...context, durationMs });
+
+  return {
+    success: true,
+    committed: true,
+    path, branch,
+    commitSha: r?.data?.commit?.sha || null,
+  };
+}
+
+/**
+ * Single-purpose: apply a unified diff patch, read file, commit result.
+ * No conditional input — accepts only a patch string.
+ */
+async function patchDiff({ owner, repo, branch, path, patch, message, installationId }) {
+  const context = { operation: 'patchDiff', owner, repo, branch, path };
+  log.info('Applying unified diff patch', context);
+  const startMs = Date.now();
+
+  const current = await readOneFile({ owner, repo, branch, path, installationId });
+  const patchResult = applyUnifiedDiff(current.content, patch);
+  if (!patchResult.ok) {
+    const err = new Error(`Patch failed: ${patchResult.error}`);
+    err.status = 409;
+    throw err;
+  }
+
+  if (patchResult.content === current.content) {
+    const durationMs = Date.now() - startMs;
+    log.info('Diff patch resulted in no changes', { ...context, durationMs });
+    return {
+      success: true,
+      committed: false,
+      path, branch,
+      message: 'Diff produced no changes to file content',
+    };
+  }
+
+  const octokit = await getInstallationOctokit({ installationId });
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(patchResult.content, 'utf8').toString('base64'),
+      branch,
+      ...(current.sha ? { sha: current.sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('Diff patch committed', { ...context, durationMs });
+
+  return {
+    success: true,
+    committed: true,
+    path, branch,
+    commitSha: r?.data?.commit?.sha || null,
   };
 }
 
@@ -604,10 +710,13 @@ module.exports = {
   readOneFile,
   listTree,
   patchOneFile,
+  patchReplace,
+  patchDiff,
   appendToFile,
   invalidateTokenCache,
   // Exported for testing
   isTransientError,
   withRetry,
   applyUnifiedDiff,
+  applySearchReplace,
 };
