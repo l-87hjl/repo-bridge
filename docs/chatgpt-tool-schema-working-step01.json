@@ -217,6 +217,16 @@
       }
     },
 
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Service observability: uptime, memory, version, GitHub rate-limit with warnings, last diagnostic snapshot.",
+        "responses": {
+          "200": { "description": "Service metrics" }
+        }
+      }
+    },
+
     "/diagnose": {
       "post": {
         "operationId": "diagnoseRepo",

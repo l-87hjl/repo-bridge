@@ -501,6 +501,33 @@
         }
       }
     },
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Service observability: uptime, memory, version, GitHub rate-limit with warning thresholds, and last background diagnostic snapshot.",
+        "responses": {
+          "200": {
+            "description": "Service metrics including memory usage, GitHub rate-limit status, and config.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "version": { "type": "string" },
+                    "uptime": { "type": "number" },
+                    "memory": { "type": "object" },
+                    "github": { "type": "object" },
+                    "diagnosis": { "type": "object" },
+                    "config": { "type": "object" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/diagnose": {
       "post": {
         "operationId": "diagnoseRepo",
