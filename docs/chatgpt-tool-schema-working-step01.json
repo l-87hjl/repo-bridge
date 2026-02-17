@@ -481,6 +481,114 @@
           "422": { "description": "Validation failed" }
         }
       }
+    },
+
+    "/readLines": {
+      "post": {
+        "operationId": "readLines",
+        "summary": "Read a file with line-accurate metadata. Normalizes line endings, returns blob SHA for drift detection, supports line range extraction.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "startLine": { "type": "integer" },
+                  "endLine": { "type": "integer" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File content with line metadata and blob SHA" }
+        }
+      }
+    },
+
+    "/blob": {
+      "post": {
+        "operationId": "getBlob",
+        "summary": "Retrieve a raw blob by SHA. Uses Git Blobs API (supports files up to 100MB).",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "sha"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "sha": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Decoded blob content with authoritative SHA" }
+        }
+      }
+    },
+
+    "/search": {
+      "post": {
+        "operationId": "searchRepoContent",
+        "summary": "Search for content across repos using GitHub Code Search. Returns line-accurate results with blob SHA references.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["query", "repos"],
+                "properties": {
+                  "query": { "type": "string" },
+                  "repos": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Search results with line-accurate references" }
+        }
+      }
+    },
+
+    "/symbols": {
+      "post": {
+        "operationId": "discoverSymbols",
+        "summary": "Discover symbol definitions (functions, classes, interfaces) across repos with line-accurate references.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repos"],
+                "properties": {
+                  "repos": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Discovered symbols with line references" }
+        }
+      }
     }
   }
 }

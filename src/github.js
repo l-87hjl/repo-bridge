@@ -3,6 +3,7 @@
 const { Octokit } = require('@octokit/rest');
 const { createAppAuth } = require('@octokit/auth-app');
 const log = require('./logger');
+const { normalizeContent, searchContent, findSymbols, buildLineReference } = require('./normalize');
 
 // --- Configuration ---
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 30000;
@@ -944,6 +945,353 @@ async function createPullRequest({ owner, repo, title, body, head, base, install
   };
 }
 
+/**
+ * Read a file with line-accurate metadata using raw blob retrieval.
+ *
+ * This is the core function that solves the line-mismatch problem:
+ *   1. Retrieves the raw file content via GitHub Contents API
+ *   2. Normalizes line endings (CRLF → LF)
+ *   3. Computes line numbers locally from the normalized content
+ *   4. Returns blob SHA for drift detection
+ *   5. Optionally extracts a specific line range
+ *
+ * @param {object} params
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @param {string} params.branch
+ * @param {string} params.path
+ * @param {string} [params.installationId]
+ * @param {number} [params.startLine] - 1-based start line (inclusive)
+ * @param {number} [params.endLine] - 1-based end line (inclusive)
+ * @param {boolean} [params.normalize=true] - Whether to normalize line endings
+ * @returns {Promise<object>} File content with line metadata
+ */
+async function readFileWithLineMap({ owner, repo, branch, path, installationId, startLine, endLine, normalize: doNormalize = true }) {
+  const context = { operation: 'readFileWithLineMap', owner, repo, branch, path };
+  log.debug('Reading file with line map', context);
+  const startMs = Date.now();
+
+  // Read the raw file
+  const fileResult = await readOneFile({ owner, repo, branch, path, installationId });
+  let content = fileResult.content;
+
+  // Normalize content for consistent line counting
+  if (doNormalize) {
+    content = normalizeContent(content);
+  }
+
+  const allLines = content.split('\n');
+  const totalLines = allLines.length;
+
+  // Build response
+  const result = {
+    ok: true,
+    owner, repo, branch, path,
+    blobSha: fileResult.sha,
+    size: fileResult.size,
+    totalLines,
+    normalized: doNormalize,
+  };
+
+  // Extract line range if requested
+  if (startLine) {
+    const start = Math.max(1, startLine);
+    const end = Math.min(totalLines, endLine || startLine);
+    const lines = [];
+    for (let i = start; i <= end; i++) {
+      lines.push({ lineNumber: i, text: allLines[i - 1] });
+    }
+    result.startLine = start;
+    result.endLine = end;
+    result.lines = lines;
+    result.content = lines.map(l => l.text).join('\n');
+  } else {
+    // Return full content with line count
+    result.content = content;
+    result.lines = allLines.map((text, i) => ({ lineNumber: i + 1, text }));
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.debug('File read with line map', { ...context, durationMs, totalLines });
+
+  return result;
+}
+
+/**
+ * Get a raw blob by SHA from a repo.
+ *
+ * Uses the Git Blobs API which supports files up to 100MB (vs 1MB for Contents API).
+ * Returns decoded content with the authoritative blob SHA.
+ *
+ * @param {object} params
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @param {string} params.sha - Blob SHA to retrieve
+ * @param {string} [params.installationId]
+ * @returns {Promise<object>} Decoded blob content
+ */
+async function getBlob({ owner, repo, sha, installationId }) {
+  const context = { operation: 'getBlob', owner, repo, sha };
+  log.debug('Fetching blob', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  const r = await withRetry(
+    () => octokit.rest.git.getBlob({ owner, repo, file_sha: sha }),
+    context
+  );
+
+  let content = r.data.content || '';
+  if (r.data.encoding === 'base64') {
+    content = Buffer.from(content.replace(/\n/g, ''), 'base64').toString('utf8');
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.debug('Blob fetched', { ...context, durationMs, size: r.data.size });
+
+  return {
+    ok: true,
+    owner, repo,
+    sha: r.data.sha,
+    size: r.data.size,
+    content,
+    encoding: 'utf8',
+  };
+}
+
+/**
+ * Search for content across one or more repos using GitHub Code Search API.
+ *
+ * Search is used for discovery (radar), then raw blob retrieval provides
+ * exact line numbers (microscope).
+ *
+ * @param {object} params
+ * @param {string} params.query - Search term
+ * @param {Array<{owner: string, repo: string}>} params.repos - Repos to search in
+ * @param {string} [params.installationId]
+ * @param {object} [params.options]
+ * @param {string} [params.options.language] - Filter by language
+ * @param {string} [params.options.extension] - Filter by file extension
+ * @param {number} [params.options.maxResults=20] - Max results to return
+ * @param {number} [params.options.contextLines=2] - Lines of context around matches
+ * @param {string} [params.options.branch] - Branch to search (for content verification)
+ * @returns {Promise<object>} Search results with line-accurate references
+ */
+async function searchRepoContent({ query, repos, installationId, options = {} }) {
+  const context = { operation: 'searchRepoContent', query, repoCount: repos.length };
+  log.info('Searching repo content', context);
+  const startMs = Date.now();
+
+  const {
+    language,
+    extension,
+    maxResults = 20,
+    contextLines = 2,
+    branch,
+  } = options;
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  // Build the search query
+  const repoQualifiers = repos.map(r => `repo:${r.owner}/${r.repo}`).join(' ');
+  let q = `${query} ${repoQualifiers}`;
+  if (language) q += ` language:${language}`;
+  if (extension) q += ` extension:${extension}`;
+
+  // Execute GitHub Code Search
+  let searchResults;
+  try {
+    searchResults = await withRetry(
+      () => octokit.rest.search.code({ q, per_page: Math.min(maxResults, 100) }),
+      { ...context, step: 'searchCode' }
+    );
+  } catch (e) {
+    // GitHub search can return 422 for invalid queries
+    if (e.status === 422) {
+      const err = new Error(`Invalid search query: ${e.message}`);
+      err.status = 400;
+      throw err;
+    }
+    throw e;
+  }
+
+  const items = searchResults.data.items || [];
+  const totalCount = searchResults.data.total_count || 0;
+
+  // For each search result, fetch the actual file and compute exact line numbers
+  const results = [];
+  const fetchLimit = Math.min(items.length, maxResults);
+
+  for (let i = 0; i < fetchLimit; i++) {
+    const item = items[i];
+    const [itemOwner, itemRepo] = item.repository.full_name.split('/');
+    const itemPath = item.path;
+
+    try {
+      // Read the actual file content for line-accurate results
+      const targetBranch = branch || 'main';
+      const fileData = await readOneFile({
+        owner: itemOwner,
+        repo: itemRepo,
+        branch: targetBranch,
+        path: itemPath,
+        installationId,
+      });
+
+      const normalizedContent = normalizeContent(fileData.content);
+
+      // Search within the actual content for exact line matches
+      const matches = searchContent(normalizedContent, query, {
+        contextLines,
+        maxResults: 10, // limit matches per file
+      });
+
+      if (matches.length > 0) {
+        results.push({
+          repo: `${itemOwner}/${itemRepo}`,
+          path: itemPath,
+          blobSha: fileData.sha,
+          branch: targetBranch,
+          matches: matches.map(m => ({
+            lineNumber: m.lineNumber,
+            text: m.text,
+            context: m.context,
+            reference: buildLineReference({
+              owner: itemOwner,
+              repo: itemRepo,
+              path: itemPath,
+              blobSha: fileData.sha,
+              startLine: m.lineNumber,
+            }),
+          })),
+        });
+      }
+    } catch (fileErr) {
+      // File might not be readable on the specified branch — include as partial result
+      log.debug('Could not fetch file for search result', {
+        owner: itemOwner, repo: itemRepo, path: itemPath,
+        error: fileErr.message,
+      });
+      results.push({
+        repo: `${itemOwner}/${itemRepo}`,
+        path: itemPath,
+        blobSha: null,
+        error: `File not readable: ${fileErr.message}`,
+        matches: [],
+      });
+    }
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.info('Search completed', { ...context, durationMs, totalCount, resultsReturned: results.length });
+
+  return {
+    ok: true,
+    query,
+    totalCount,
+    resultsReturned: results.length,
+    results,
+  };
+}
+
+/**
+ * Discover symbols (functions, classes, interfaces, etc.) across one or more repos.
+ *
+ * @param {object} params
+ * @param {Array<{owner: string, repo: string, branch?: string, paths?: string[]}>} params.repos
+ * @param {string} [params.installationId]
+ * @param {object} [params.options]
+ * @param {string} [params.options.nameFilter] - Filter symbols by name
+ * @param {string[]} [params.options.typeFilter] - Filter by type ('function', 'class', etc.)
+ * @param {string[]} [params.options.extensions] - File extensions to scan (e.g., ['.js', '.ts'])
+ * @param {number} [params.options.maxFiles=50] - Max files to scan per repo
+ * @returns {Promise<object>} Discovered symbols with line-accurate references
+ */
+async function discoverSymbols({ repos, installationId, options = {} }) {
+  const context = { operation: 'discoverSymbols', repoCount: repos.length };
+  log.info('Discovering symbols', context);
+  const startMs = Date.now();
+
+  const {
+    nameFilter,
+    typeFilter,
+    extensions = ['.js', '.ts', '.py', '.go', '.rb', '.java', '.rs'],
+    maxFiles = 50,
+  } = options;
+
+  const allSymbols = [];
+
+  for (const repoSpec of repos) {
+    const { owner, repo, branch: repoBranch, paths: targetPaths } = repoSpec;
+    const branch = repoBranch || 'main';
+
+    try {
+      // Get the file tree to find scannable files
+      const tree = await getRepoTree({ owner, repo, branch, installationId });
+
+      // Filter to files with matching extensions
+      let filesToScan = tree.entries.filter(entry => {
+        if (entry.type !== 'file') return false;
+        const ext = entry.path.includes('.') ? '.' + entry.path.split('.').pop().toLowerCase() : '';
+        if (!extensions.some(e => e.toLowerCase() === ext)) return false;
+        // If specific paths requested, filter by prefix
+        if (targetPaths && targetPaths.length > 0) {
+          return targetPaths.some(p => entry.path.startsWith(p));
+        }
+        return true;
+      });
+
+      // Limit files scanned
+      filesToScan = filesToScan.slice(0, maxFiles);
+
+      // Read each file and extract symbols
+      for (const file of filesToScan) {
+        try {
+          const fileData = await readOneFile({
+            owner, repo, branch, path: file.path, installationId,
+          });
+
+          const content = normalizeContent(fileData.content);
+          const symbols = findSymbols(content, file.path, { nameFilter, typeFilter });
+
+          for (const sym of symbols) {
+            allSymbols.push({
+              ...sym,
+              repo: `${owner}/${repo}`,
+              path: file.path,
+              branch,
+              blobSha: fileData.sha,
+              reference: buildLineReference({
+                owner, repo, path: file.path,
+                blobSha: fileData.sha,
+                startLine: sym.lineNumber,
+              }),
+            });
+          }
+        } catch (fileErr) {
+          log.debug('Could not read file for symbol discovery', {
+            owner, repo, path: file.path, error: fileErr.message,
+          });
+        }
+      }
+    } catch (treeErr) {
+      log.warn('Could not get repo tree for symbol discovery', {
+        owner, repo, branch, error: treeErr.message,
+      });
+    }
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.info('Symbol discovery completed', { ...context, durationMs, symbolCount: allSymbols.length });
+
+  return {
+    ok: true,
+    totalSymbols: allSymbols.length,
+    symbols: allSymbols,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
@@ -961,6 +1309,12 @@ module.exports = {
   createBranch,
   createPullRequest,
   invalidateTokenCache,
+  // New: line-accurate reading and blob retrieval
+  readFileWithLineMap,
+  getBlob,
+  // New: cross-repo search and symbol discovery
+  searchRepoContent,
+  discoverSymbols,
   // Exported for testing
   isTransientError,
   withRetry,

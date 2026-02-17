@@ -72,9 +72,13 @@ app.get('/', (req, res) => {
   res.json({
     service: 'repo-bridge',
     status: 'running',
-    version: '0.6.0',
-    endpoints: ['/health', '/metrics', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
+    version: '0.7.0',
+    endpoints: ['/health', '/metrics', '/apply', '/read', '/readLines', '/blob', '/search', '/symbols', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
     capabilities: {
+      readLines: 'Line-accurate file reading with normalization, blob SHA drift detection, and line range extraction via /readLines (v0.7.0)',
+      blob: 'Direct blob retrieval by SHA via Git Blobs API (supports files up to 100MB) via /blob (v0.7.0)',
+      search: 'Cross-repo content search with line-accurate results via /search (v0.7.0)',
+      symbols: 'Cross-repo symbol discovery (functions, classes, interfaces) via /symbols (v0.7.0)',
       listBranches: 'List all branches for a repo via /listBranches (v0.7.0)',
       createBranch: 'Create feature branches via /createBranch (v0.7.0)',
       createPR: 'Propose changes via pull requests with /createPR (v0.7.0)',
@@ -96,7 +100,7 @@ app.get('/health', async (req, res) => {
   const health = {
     ok: true,
     service: 'repo-bridge',
-    version: '0.6.0',
+    version: '0.7.0',
     time: new Date().toISOString(),
     uptime: process.uptime(),
   };
@@ -135,7 +139,7 @@ app.get('/metrics', async (req, res) => {
   const metrics = {
     success: true,
     service: 'repo-bridge',
-    version: '0.6.0',
+    version: '0.7.0',
     uptime: process.uptime(),
     time: new Date().toISOString(),
     memory: {
@@ -1753,6 +1757,223 @@ app.post('/createPR', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Line-Accurate Reading & Blob Retrieval ──────────────────────────────────
+
+/**
+ * POST /readLines - Read a file with line-accurate metadata.
+ *
+ * Solves the line-mismatch problem by:
+ *   1. Retrieving raw file content
+ *   2. Normalizing line endings (CRLF → LF)
+ *   3. Computing line numbers locally
+ *   4. Returning blob SHA for drift detection
+ *   5. Optionally extracting a specific line range
+ *
+ * Input: { repo, path, branch?, startLine?, endLine?, normalize? }
+ *
+ * Response includes:
+ *   - content: normalized file content (or line range)
+ *   - lines: array of { lineNumber, text } objects
+ *   - blobSha: authoritative blob SHA for drift detection
+ *   - totalLines: total line count
+ */
+app.post('/readLines', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const installationId = b.installationId;
+    const startLine = b.startLine ? Number(b.startLine) : undefined;
+    const endLine = b.endLine ? Number(b.endLine) : undefined;
+    const normalize = b.normalize !== false; // default true
+
+    if (!owner || !repo || !path) {
+      return badRequest(res, 'Required: repo (owner/repo), path. Optional: branch, startLine, endLine, normalize.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+
+    const { readFileWithLineMap } = require('./github');
+    const result = await readFileWithLineMap({
+      owner, repo, branch, path, installationId,
+      startLine, endLine, normalize,
+    });
+    return res.json(result);
+  } catch (e) {
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'File not found.', requestId: req.requestId });
+    }
+    if (status === 400) {
+      return res.status(400).json({ ok: false, error: 'BadRequest', message: e.message, requestId: req.requestId });
+    }
+    return errorResponse(res, 500, 'ReadLinesFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /blob - Retrieve a raw blob by SHA.
+ *
+ * Uses the Git Blobs API which supports files up to 100MB (vs 1MB for Contents API).
+ * Returns decoded UTF-8 content with the authoritative blob SHA.
+ *
+ * Input: { repo, sha }
+ */
+app.post('/blob', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const sha = b.sha;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !sha) {
+      return badRequest(res, 'Required: repo (owner/repo), sha (blob SHA).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { getBlob } = require('./github');
+    const result = await getBlob({ owner, repo, sha, installationId });
+    return res.json(result);
+  } catch (e) {
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Blob not found.', requestId: req.requestId });
+    }
+    return errorResponse(res, 500, 'BlobFailed', e, { requestId: req.requestId });
+  }
+});
+
+// ─── Cross-Repo Search & Symbol Discovery ─────────────────────────────────────
+
+/**
+ * POST /search - Search for content across one or more repos.
+ *
+ * Uses GitHub Code Search API for discovery, then fetches raw file content
+ * for line-accurate results. Think of search as radar, blob retrieval as microscope.
+ *
+ * Input: {
+ *   query: "search term",
+ *   repos: ["owner/repo1", "owner/repo2"],
+ *   options?: { language?, extension?, maxResults?, contextLines?, branch? }
+ * }
+ */
+app.post('/search', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const query = b.query;
+    const repoSpecs = b.repos;
+    const installationId = b.installationId;
+    const options = b.options || {};
+
+    if (!query || typeof query !== 'string') {
+      return badRequest(res, 'Required: query (search string).');
+    }
+    if (!repoSpecs || !Array.isArray(repoSpecs) || repoSpecs.length === 0) {
+      return badRequest(res, 'Required: repos[] (array of "owner/repo" strings).');
+    }
+    if (repoSpecs.length > 10) {
+      return badRequest(res, 'Maximum 10 repos per search request.');
+    }
+
+    // Parse repo strings into {owner, repo} objects
+    const repos = [];
+    for (const r of repoSpecs) {
+      let owner, repo;
+      if (typeof r === 'string' && r.includes('/')) {
+        [owner, repo] = r.split('/');
+      } else if (typeof r === 'object' && r.owner && r.repo) {
+        owner = r.owner;
+        repo = r.repo;
+      } else {
+        return badRequest(res, `Invalid repo format: ${JSON.stringify(r)}. Use "owner/repo" string.`);
+      }
+
+      if (!isRepoAllowed(owner, repo)) {
+        return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+      }
+      repos.push({ owner, repo });
+    }
+
+    const { searchRepoContent } = require('./github');
+    const result = await searchRepoContent({ query, repos, installationId, options });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 400) {
+      return badRequest(res, e.message);
+    }
+    return errorResponse(res, 500, 'SearchFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /symbols - Discover symbols (functions, classes, etc.) across repos.
+ *
+ * Scans source files in specified repos and returns symbol definitions with
+ * line-accurate references. Supports JavaScript, TypeScript, Python, Go,
+ * Ruby, Java, Kotlin, C#, and Rust.
+ *
+ * Input: {
+ *   repos: [{ repo: "owner/repo", branch?: "main", paths?: ["src/"] }],
+ *   options?: { nameFilter?, typeFilter?, extensions?, maxFiles? }
+ * }
+ */
+app.post('/symbols', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const repoSpecs = b.repos;
+    const installationId = b.installationId;
+    const options = b.options || {};
+
+    if (!repoSpecs || !Array.isArray(repoSpecs) || repoSpecs.length === 0) {
+      return badRequest(res, 'Required: repos[] (array of { repo: "owner/repo", branch?, paths? }).');
+    }
+    if (repoSpecs.length > 5) {
+      return badRequest(res, 'Maximum 5 repos per symbol discovery request.');
+    }
+
+    // Parse and validate repo specs
+    const repos = [];
+    for (const r of repoSpecs) {
+      let owner, repo, branch, paths;
+      if (typeof r === 'string' && r.includes('/')) {
+        [owner, repo] = r.split('/');
+      } else if (typeof r === 'object') {
+        const parsed = parseOwnerRepo(r);
+        owner = parsed.owner;
+        repo = parsed.repo;
+        branch = r.branch;
+        paths = r.paths;
+      } else {
+        return badRequest(res, `Invalid repo format: ${JSON.stringify(r)}.`);
+      }
+
+      if (!owner || !repo) {
+        return badRequest(res, `Invalid repo: ${JSON.stringify(r)}. Use "owner/repo" or {repo: "owner/repo"}.`);
+      }
+
+      if (!isRepoAllowed(owner, repo)) {
+        return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+      }
+      repos.push({ owner, repo, branch, paths });
+    }
+
+    const { discoverSymbols } = require('./github');
+    const result = await discoverSymbols({ repos, installationId, options });
+    return res.json(result);
+  } catch (e) {
+    return errorResponse(res, 500, 'SymbolsFailed', e, { requestId: req.requestId });
+  }
+});
+
 // ─── Catch-all and error handler ──────────────────────────────────────────────
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
@@ -1831,7 +2052,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 server = app.listen(PORT, () => {
-  log.info('repo-bridge started', { port: PORT, version: '0.6.0' });
+  log.info('repo-bridge started', { port: PORT, version: '0.7.0' });
 
   // Start self-diagnosis loop if configured
   if (DIAG_INTERVAL_MS > 0) {
