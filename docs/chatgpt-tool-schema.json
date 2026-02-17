@@ -1,5 +1,5 @@
 {
-  "openapi": "3.1.0",
+  "openapi": "3.0.1",
   "info": {
     "title": "repo-bridge",
     "version": "2.0.0"
@@ -31,17 +31,11 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Directory listing",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "Directory listing" }
         }
       }
     },
+
     "/read": {
       "post": {
         "operationId": "readFile",
@@ -63,21 +57,15 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "File contents",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "File contents" }
         }
       }
     },
+
     "/batchRead": {
       "post": {
         "operationId": "batchRead",
-        "summary": "Read multiple files from one or more repositories.",
+        "summary": "Read up to 25 files from one or more repositories in one call.",
         "requestBody": {
           "required": true,
           "content": {
@@ -88,8 +76,6 @@
                 "properties": {
                   "files": {
                     "type": "array",
-                    "minItems": 1,
-                    "maxItems": 10,
                     "items": {
                       "type": "object",
                       "required": ["repo", "path"],
@@ -106,21 +92,15 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Batch read results",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "Batch read results" }
         }
       }
     },
+
     "/compare": {
       "post": {
         "operationId": "compareFiles",
-        "summary": "Compare a file between two repositories or branches. Returns both contents and a line-by-line diff.",
+        "summary": "Compare a file between two repositories or branches.",
         "requestBody": {
           "required": true,
           "content": {
@@ -133,7 +113,7 @@
                     "type": "object",
                     "required": ["repo", "path"],
                     "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format" },
+                      "repo": { "type": "string" },
                       "path": { "type": "string" },
                       "branch": { "type": "string" }
                     }
@@ -142,15 +122,9 @@
                     "type": "object",
                     "required": ["repo"],
                     "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format" },
-                      "path": { "type": "string", "description": "Defaults to source.path if omitted" },
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
                       "branch": { "type": "string" }
-                    }
-                  },
-                  "options": {
-                    "type": "object",
-                    "properties": {
-                      "includeContent": { "type": "boolean", "description": "Include full file contents in response. Defaults to true." }
                     }
                   }
                 }
@@ -159,21 +133,15 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Comparison result with diff",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "Comparison result" }
         }
       }
     },
+
     "/compareStructure": {
       "post": {
         "operationId": "compareStructure",
-        "summary": "Compare directory structures between two repositories. Returns files only in source, only in target, and in both.",
+        "summary": "Compare directory structures between two repositories.",
         "requestBody": {
           "required": true,
           "content": {
@@ -186,8 +154,8 @@
                     "type": "object",
                     "required": ["repo"],
                     "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format" },
-                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
                       "branch": { "type": "string" }
                     }
                   },
@@ -195,8 +163,8 @@
                     "type": "object",
                     "required": ["repo"],
                     "properties": {
-                      "repo": { "type": "string", "description": "owner/repo format" },
-                      "path": { "type": "string", "description": "Directory path. Defaults to root." },
+                      "repo": { "type": "string" },
+                      "path": { "type": "string" },
                       "branch": { "type": "string" }
                     }
                   }
@@ -206,58 +174,15 @@
           }
         },
         "responses": {
-          "200": {
-            "description": "Structure comparison result",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "Structure comparison result" }
         }
       }
     },
-    "/copy": {
-      "post": {
-        "operationId": "copyFile",
-        "summary": "Copy an existing file from one repository to another. Only use this to duplicate a file that already exists — to write new content, use /apply instead.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["sourceRepo", "sourcePath", "destinationRepo"],
-                "properties": {
-                  "sourceRepo": { "type": "string" },
-                  "sourcePath": { "type": "string" },
-                  "sourceBranch": { "type": "string" },
-                  "destinationRepo": { "type": "string" },
-                  "destinationPath": { "type": "string" },
-                  "destinationBranch": { "type": "string" },
-                  "message": { "type": "string" }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Copy result",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
-        }
-      }
-    },
+
     "/apply": {
       "post": {
         "operationId": "writeFile",
-        "summary": "Write a file to GitHub. Creates or updates a file with the content you provide, creating a real Git commit. Supports SHA guard for safe writes and append mode. For partial changes, use /patch instead.",
-        "description": "Primary endpoint for creating files with new content. Provide full file content in the content field. Supports expectedSha for optimistic concurrency (prevents overwrites if file changed) and mode:'append' to add content without replacing. The /copy endpoint is only for duplicating an existing file — never use /copy when you have content to write. For incremental changes (search-replace or diffs), use /patch instead.",
+        "summary": "Create or update a file in a GitHub repository.",
         "requestBody": {
           "required": true,
           "content": {
@@ -266,245 +191,46 @@
                 "type": "object",
                 "required": ["repo", "path", "content", "message"],
                 "properties": {
-                  "repo": { "type": "string", "description": "Repository in owner/repo format, e.g. l-87hjl/alexandria-scribe" },
-                  "path": { "type": "string", "description": "File path to create or update, e.g. docs/CHECKLIST.md" },
-                  "content": { "type": "string", "description": "The complete file content to write (or content to append if mode is 'append')" },
-                  "message": { "type": "string", "description": "Git commit message describing what was written and why" },
-                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
-                  "expectedSha": { "type": "string", "description": "SHA from a previous /read response. If provided, write will fail with 409 if the file has changed since that read. Use for safe overwrites." },
-                  "mode": { "type": "string", "enum": ["append"], "description": "Set to 'append' to add content to end of file instead of replacing it." },
-                  "separator": { "type": "string", "description": "Separator between existing and appended content. Defaults to newline. Only used with mode:'append'." }
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {
-            "description": "File written successfully. Returns commit SHA and file metadata.",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          },
-          "409": {
-            "description": "SHA conflict — file was modified since last read. Re-read and retry.",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "File written successfully" }
         }
       }
     },
-    "/patch": {
-      "post": {
-        "operationId": "patchFile",
-        "summary": "Apply incremental changes to a file without full replacement. Reads the file, applies search-and-replace operations or a unified diff, then commits the result. Safer than /apply for partial modifications.",
-        "description": "Use this endpoint to make targeted changes to a file. Mode 1 (recommended): provide operations[] with search/replace pairs. Mode 2: provide a unified diff patch string. The file is read first, changes are applied, and the result is committed. If a search string is not found or diff context doesn't match, the request fails with 409 instead of corrupting the file.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["repo", "path", "message"],
-                "properties": {
-                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
-                  "path": { "type": "string", "description": "File path to patch" },
-                  "message": { "type": "string", "description": "Git commit message" },
-                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
-                  "operations": {
-                    "type": "array",
-                    "description": "Search-and-replace operations. Provide this OR patch, not both.",
-                    "items": {
-                      "type": "object",
-                      "required": ["search", "replace"],
-                      "properties": {
-                        "search": { "type": "string", "description": "Exact string to find in the file" },
-                        "replace": { "type": "string", "description": "String to replace it with" },
-                        "replaceAll": { "type": "boolean", "description": "Replace all occurrences. Default: false (first only)." }
-                      }
-                    }
-                  },
-                  "patch": { "type": "string", "description": "Unified diff string. Provide this OR operations, not both." },
-                  "dryRun": { "type": "boolean", "description": "Preview changes without committing. Returns the would-be result." }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Patch applied and committed. Returns commit SHA and operation details.",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          },
-          "409": {
-            "description": "Patch conflict — search string not found or diff context mismatch. Re-read the file and adjust.",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/patchReplace": {
-      "post": {
-        "operationId": "patchReplaceFile",
-        "summary": "Apply search-and-replace operations to a file. Reads the file, applies each operation sequentially, and commits the result.",
-        "description": "Targeted search-and-replace on a single file. Provide an array of operations, each with a search string and its replacement. Operations are applied in order. If a search string is not found, the request fails with 409.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["repo", "path", "message", "operations"],
-                "properties": {
-                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
-                  "path": { "type": "string", "description": "File path to patch" },
-                  "message": { "type": "string", "description": "Git commit message" },
-                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
-                  "operations": {
-                    "type": "array",
-                    "description": "Search-and-replace operations applied sequentially.",
-                    "items": {
-                      "type": "object",
-                      "required": ["search", "replace"],
-                      "properties": {
-                        "search": { "type": "string", "description": "Exact string to find in the file" },
-                        "replace": { "type": "string", "description": "String to replace it with" }
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Patch applied and committed successfully.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": { "type": "boolean" },
-                    "committed": { "type": "boolean" },
-                    "commitSha": { "type": "string" },
-                    "path": { "type": "string" },
-                    "branch": { "type": "string" }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict — search string not found. Re-read the file and adjust.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": { "type": "boolean" },
-                    "error": { "type": "string" },
-                    "message": { "type": "string" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/patchDiff": {
-      "post": {
-        "operationId": "patchDiffFile",
-        "summary": "Apply a unified diff patch to a file. Reads the file, applies the diff, and commits the result.",
-        "description": "Apply a unified diff (with @@ hunk headers) to a single file. Context lines are verified before applying. If context does not match, the request fails with 409.",
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "required": ["repo", "path", "message", "patch"],
-                "properties": {
-                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
-                  "path": { "type": "string", "description": "File path to patch" },
-                  "message": { "type": "string", "description": "Git commit message" },
-                  "branch": { "type": "string", "description": "Target branch. Defaults to main." },
-                  "patch": { "type": "string", "description": "Unified diff string with @@ hunk headers" }
-                }
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "Diff applied and committed successfully.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": { "type": "boolean" },
-                    "committed": { "type": "boolean" },
-                    "commitSha": { "type": "string" },
-                    "path": { "type": "string" },
-                    "branch": { "type": "string" }
-                  }
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Conflict — diff context mismatch. Re-read the file and regenerate the diff.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "success": { "type": "boolean" },
-                    "error": { "type": "string" },
-                    "message": { "type": "string" }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-    },
+
     "/health": {
       "get": {
         "operationId": "healthCheck",
-        "summary": "Check service status and GitHub connectivity.",
+        "summary": "Check service status.",
         "responses": {
-          "200": {
-            "description": "Health status including GitHub rate limit info",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
-              }
-            }
-          }
+          "200": { "description": "Service status" }
         }
       }
     },
+
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Service observability: uptime, memory, version, GitHub rate-limit with warnings, last diagnostic snapshot.",
+        "responses": {
+          "200": { "description": "Service metrics" }
+        }
+      }
+    },
+
     "/diagnose": {
       "post": {
         "operationId": "diagnoseRepo",
-        "summary": "Test connectivity and permissions for a specific repository. Runs checks on allowlist, auth, rate limits, repo access, branch name, and file access. Use this when reads fail to find out exactly why.",
+        "summary": "Run repository diagnostics.",
         "requestBody": {
           "required": true,
           "content": {
@@ -513,23 +239,166 @@
                 "type": "object",
                 "required": ["repo"],
                 "properties": {
-                  "repo": { "type": "string", "description": "owner/repo format, e.g. l-87hjl/agent-project-space" },
-                  "path": { "type": "string", "description": "File path to test. Defaults to README.md" },
-                  "branch": { "type": "string", "description": "Branch to test. Defaults to main" }
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "branch": { "type": "string" }
                 }
               }
             }
           }
         },
         "responses": {
-          "200": {
-            "description": "Diagnostic report with per-check results",
-            "content": {
-              "application/json": {
-                "schema": { "type": "object" }
+          "200": { "description": "Diagnostic report" }
+        }
+      }
+    },
+
+    "/patchReplace": {
+      "post": {
+        "operationId": "patchReplaceFile",
+        "summary": "Apply search-and-replace operations to a file and commit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "operations"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["search", "replace"],
+                      "properties": {
+                        "search": { "type": "string" },
+                        "replace": { "type": "string" }
+                      }
+                    }
+                  }
+                }
               }
             }
           }
+        },
+        "responses": {
+          "200": { "description": "Patch applied and committed" },
+          "409": { "description": "Search string not found" }
+        }
+      }
+    },
+
+    "/patchDiff": {
+      "post": {
+        "operationId": "patchDiffFile",
+        "summary": "Apply a unified diff to a file and commit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "patch"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "patch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Diff applied and committed" },
+          "409": { "description": "Diff context mismatch" }
+        }
+      }
+    },
+
+    "/repoTree": {
+      "post": {
+        "operationId": "getRepoTree",
+        "summary": "Get full recursive file tree for a repository with SHAs and sizes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Recursive tree listing" }
+        }
+      }
+    },
+
+    "/deleteFile": {
+      "post": {
+        "operationId": "deleteFile",
+        "summary": "Delete a file from a repository and commit the deletion.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File deleted" },
+          "404": { "description": "File not found" }
+        }
+      }
+    },
+
+    "/updateFile": {
+      "post": {
+        "operationId": "updateFile",
+        "summary": "Update a file with new content. Server handles diffing automatically.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File updated" },
+          "404": { "description": "File not found" }
         }
       }
     }

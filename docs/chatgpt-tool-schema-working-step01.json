@@ -65,7 +65,7 @@
     "/batchRead": {
       "post": {
         "operationId": "batchRead",
-        "summary": "Read multiple files from one or more repositories.",
+        "summary": "Read up to 25 files from one or more repositories in one call.",
         "requestBody": {
           "required": true,
           "content": {
@@ -217,6 +217,16 @@
       }
     },
 
+    "/metrics": {
+      "get": {
+        "operationId": "getMetrics",
+        "summary": "Service observability: uptime, memory, version, GitHub rate-limit with warnings, last diagnostic snapshot.",
+        "responses": {
+          "200": { "description": "Service metrics" }
+        }
+      }
+    },
+
     "/diagnose": {
       "post": {
         "operationId": "diagnoseRepo",
@@ -239,6 +249,156 @@
         },
         "responses": {
           "200": { "description": "Diagnostic report" }
+        }
+      }
+    },
+
+    "/patchReplace": {
+      "post": {
+        "operationId": "patchReplaceFile",
+        "summary": "Apply search-and-replace operations to a file and commit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "operations"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "operations": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": ["search", "replace"],
+                      "properties": {
+                        "search": { "type": "string" },
+                        "replace": { "type": "string" }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Patch applied and committed" },
+          "409": { "description": "Search string not found" }
+        }
+      }
+    },
+
+    "/patchDiff": {
+      "post": {
+        "operationId": "patchDiffFile",
+        "summary": "Apply a unified diff to a file and commit.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message", "patch"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "patch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Diff applied and committed" },
+          "409": { "description": "Diff context mismatch" }
+        }
+      }
+    },
+
+    "/repoTree": {
+      "post": {
+        "operationId": "getRepoTree",
+        "summary": "Get full recursive file tree for a repository with SHAs and sizes.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Recursive tree listing" }
+        }
+      }
+    },
+
+    "/deleteFile": {
+      "post": {
+        "operationId": "deleteFile",
+        "summary": "Delete a file from a repository and commit the deletion.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File deleted" },
+          "404": { "description": "File not found" }
+        }
+      }
+    },
+
+    "/updateFile": {
+      "post": {
+        "operationId": "updateFile",
+        "summary": "Update a file with new content. Server handles diffing automatically.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File updated" },
+          "404": { "description": "File not found" }
         }
       }
     }

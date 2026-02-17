@@ -28,6 +28,20 @@ const READ_ONLY_REPOS = (process.env.READ_ONLY_REPOS || '')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
 
+// Parse patch-only paths from environment (comma-separated path prefixes/patterns)
+// Files matching these paths cannot be overwritten via /apply — must use /patchReplace or /patchDiff
+const PATCH_ONLY_PATHS = process.env.PATCH_ONLY_PATHS
+  ? process.env.PATCH_ONLY_PATHS.split(',').map(s => s.trim()).filter(Boolean)
+  : null; // null means no restrictions
+
+// Self-diagnosis interval (ms). 0 or unset disables background diagnosis.
+const DIAG_INTERVAL_MS = process.env.DIAG_INTERVAL_MS ? Number(process.env.DIAG_INTERVAL_MS) : 0;
+
+// Shared state for /metrics
+let lastDiagnosticSnapshot = null;
+let lastDiagnosticTime = null;
+let diagIntervalHandle = null;
+
 // ─── Request logging middleware ───────────────────────────────────────────────
 app.use((req, res, next) => {
   const requestId = log.generateRequestId();
@@ -58,9 +72,14 @@ app.get('/', (req, res) => {
   res.json({
     service: 'repo-bridge',
     status: 'running',
-    version: '0.5.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    version: '0.6.0',
+    endpoints: ['/health', '/metrics', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
     capabilities: {
+      metrics: 'Service observability with rate-limit warnings via /metrics (v0.6.0)',
+      repoTree: 'Full recursive file tree with SHAs in one call via /repoTree (v0.6.0)',
+      deleteFile: 'Direct file deletion via /deleteFile — no patch gymnastics (v0.6.0)',
+      updateFile: 'Server-side auto-diff file update via /updateFile — no context mismatch (v0.6.0)',
+      patchOnlyPaths: 'Protect critical files from full overwrites via PATCH_ONLY_PATHS (v0.6.0)',
       patchReplace: 'Search-and-replace file patching via /patchReplace — flat schema, GPT Actions safe (v0.5.0)',
       patchDiff: 'Unified diff file patching via /patchDiff — flat schema, GPT Actions safe (v0.5.0)',
       patch: 'Legacy combined patch endpoint via /patch — supports both modes (v0.5.0)',
@@ -74,7 +93,7 @@ app.get('/health', async (req, res) => {
   const health = {
     ok: true,
     service: 'repo-bridge',
-    version: '0.5.0',
+    version: '0.6.0',
     time: new Date().toISOString(),
     uptime: process.uptime(),
   };
@@ -101,6 +120,63 @@ app.get('/health', async (req, res) => {
 
   const statusCode = health.ok ? 200 : 503;
   res.status(statusCode).json(health);
+});
+
+/**
+ * GET /metrics - Service observability: uptime, memory, version, GitHub rate-limit, last diagnostic.
+ *
+ * Rate-limit warning threshold: remaining < 10% of limit → warning status.
+ */
+app.get('/metrics', async (req, res) => {
+  const mem = process.memoryUsage();
+  const metrics = {
+    success: true,
+    service: 'repo-bridge',
+    version: '0.6.0',
+    uptime: process.uptime(),
+    time: new Date().toISOString(),
+    memory: {
+      rss: mem.rss,
+      heapUsed: mem.heapUsed,
+      heapTotal: mem.heapTotal,
+      external: mem.external,
+    },
+    github: null,
+    diagnosis: lastDiagnosticSnapshot
+      ? { snapshot: lastDiagnosticSnapshot, capturedAt: lastDiagnosticTime }
+      : { snapshot: null, capturedAt: null },
+    config: {
+      patchOnlyPaths: PATCH_ONLY_PATHS || [],
+      readOnlyRepos: READ_ONLY_REPOS,
+      diagIntervalMs: DIAG_INTERVAL_MS,
+    },
+  };
+
+  // Fetch GitHub rate-limit with warning threshold
+  if (process.env.GITHUB_APP_ID && process.env.GITHUB_PRIVATE_KEY) {
+    try {
+      const { getInstallationOctokit } = require('./github');
+      const octokit = await getInstallationOctokit();
+      const { data } = await octokit.rest.rateLimit.get();
+      const remaining = data.rate.remaining;
+      const limit = data.rate.limit;
+      const threshold = Math.floor(limit * 0.1);
+      metrics.github = {
+        connected: true,
+        rateLimit: {
+          remaining,
+          limit,
+          resetsAt: new Date(data.rate.reset * 1000).toISOString(),
+          warning: remaining < threshold,
+          warningThreshold: threshold,
+        },
+      };
+    } catch (e) {
+      metrics.github = { connected: false, error: e.message };
+    }
+  }
+
+  res.json(metrics);
 });
 
 function badRequest(res, message) {
@@ -225,6 +301,20 @@ function isRepoReadOnly(owner, repo) {
   if (READ_ONLY_REPOS.length === 0) return false;
   const fullName = `${owner}/${repo}`.toLowerCase();
   return READ_ONLY_REPOS.includes(fullName);
+}
+
+/**
+ * Check if a path requires patch-only writes (no full overwrite via /apply).
+ */
+function isPatchOnlyPath(filePath) {
+  if (!PATCH_ONLY_PATHS) return false;
+  return PATCH_ONLY_PATHS.some(pattern => {
+    if (pattern.includes('*')) {
+      const regex = new RegExp('^' + pattern.replace(/\*/g, '.*') + '$');
+      return regex.test(filePath);
+    }
+    return filePath === pattern || filePath.startsWith(pattern.endsWith('/') ? pattern : pattern + '/');
+  });
 }
 
 /**
@@ -356,6 +446,14 @@ app.post('/apply', requireAuth, async (req, res) => {
           const result = await appendToFile({ owner, repo, branch, path: c.path, content: c.content, separator: c.separator, message, installationId });
           results.push(result);
         } else {
+          // Patch-only enforcement for multi-file apply
+          if (isPatchOnlyPath(c.path)) {
+            return res.status(403).json({
+              ok: false,
+              error: 'PatchOnlyPath',
+              message: `Path ${c.path} is protected — full overwrites are not allowed. Use /patchReplace or /patchDiff instead.`,
+            });
+          }
           const result = await applyOneFile({ owner, repo, branch, path: c.path, content: c.content, message, installationId, expectedSha: c.expectedSha });
           results.push(result);
         }
@@ -396,6 +494,15 @@ app.post('/apply', requireAuth, async (req, res) => {
       const { appendToFile } = require('./github');
       const result = await appendToFile({ owner, repo, branch, path, content, separator: b.separator, message, installationId });
       return res.json(result);
+    }
+
+    // Patch-only enforcement: block full overwrites for protected paths
+    if (isPatchOnlyPath(path)) {
+      return res.status(403).json({
+        ok: false,
+        error: 'PatchOnlyPath',
+        message: `Path ${path} is protected — full overwrites are not allowed. Use /patchReplace or /patchDiff instead.`,
+      });
     }
 
     const { applyOneFile } = require('./github');
@@ -654,6 +761,139 @@ app.post('/patchDiff', requireAuth, async (req, res) => {
   }
 });
 
+/**
+ * POST /repoTree - Get the full recursive file tree for a repository.
+ *
+ * Single API call via GitHub Git Trees API (recursive=1).
+ * Returns all files and directories with paths, SHAs, sizes.
+ * Eliminates directory-by-directory traversal.
+ *
+ * Input: { repo, branch? }
+ */
+app.post('/repoTree', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const installationId = b.installationId;
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (in owner/repo format).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { getRepoTree } = require('./github');
+    const result = await getRepoTree({ owner, repo, branch, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'Repository or branch not found' });
+    }
+    return errorResponse(res, 500, 'RepoTreeFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /deleteFile - Delete a file from a repository.
+ *
+ * Single-purpose: deletes one file and commits the deletion.
+ * No patch gymnastics required.
+ *
+ * Input: { repo, path, message, branch? }
+ */
+app.post('/deleteFile', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const message = b.message;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, message.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { deleteOneFile } = require('./github');
+    const result = await deleteOneFile({ owner, repo, branch, path, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    return errorResponse(res, 500, 'DeleteFileFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /updateFile - Update a file with new content using server-side diffing.
+ *
+ * The server reads the current file, accepts the full new content, and commits.
+ * No client-side diff computation needed. No context mismatch possible.
+ * If content is identical, returns success with committed: false.
+ *
+ * Input: { repo, path, content, message, branch? }
+ */
+app.post('/updateFile', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const content = b.content;
+    const message = b.message;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, content, message.');
+    }
+    if (typeof content !== 'string') {
+      return badRequest(res, 'content must be a string.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { updateFile } = require('./github');
+    const result = await updateFile({ owner, repo, branch, path, content, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    if (e.status === 409) {
+      return res.status(409).json({ success: false, error: 'conflict', message: e.message });
+    }
+    return errorResponse(res, 500, 'UpdateFileFailed', e, { requestId: req.requestId });
+  }
+});
+
 app.post('/read', requireAuth, async (req, res) => {
   const b = req.body || {};
   const { owner, repo } = parseOwnerRepo(b);
@@ -805,8 +1045,8 @@ async function handleBatchRead(req, res) {
       return badRequest(res, 'Required: files[] array with objects containing repo (owner/name) and path');
     }
 
-    if (files.length > 10) {
-      return badRequest(res, 'Maximum 10 files per batch read request');
+    if (files.length > 25) {
+      return badRequest(res, 'Maximum 25 files per batch read request');
     }
 
     const parsed = [];
@@ -1408,12 +1648,51 @@ app.use((err, req, res, _next) => {
   res.status(500).json({ ok: false, error: 'ServerError', requestId: req.requestId });
 });
 
+// ─── Self-diagnosis background loop ───────────────────────────────────────────
+
+async function runBackgroundDiagnosis() {
+  try {
+    const snapshot = {
+      time: new Date().toISOString(),
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      github: null,
+    };
+
+    if (process.env.GITHUB_APP_ID && process.env.GITHUB_PRIVATE_KEY) {
+      try {
+        const { getInstallationOctokit } = require('./github');
+        const octokit = await getInstallationOctokit();
+        const { data } = await octokit.rest.rateLimit.get();
+        const remaining = data.rate.remaining;
+        const limit = data.rate.limit;
+        snapshot.github = {
+          connected: true,
+          remaining,
+          limit,
+          warning: remaining < Math.floor(limit * 0.1),
+          resetsAt: new Date(data.rate.reset * 1000).toISOString(),
+        };
+      } catch (e) {
+        snapshot.github = { connected: false, error: e.message };
+      }
+    }
+
+    lastDiagnosticSnapshot = snapshot;
+    lastDiagnosticTime = snapshot.time;
+    log.debug('Background diagnosis completed', { github: snapshot.github?.connected });
+  } catch (e) {
+    log.warn('Background diagnosis failed', { error: e.message });
+  }
+}
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 
 let server;
 
 function shutdown(signal) {
   log.info(`Received ${signal}, shutting down gracefully`);
+  if (diagIntervalHandle) clearInterval(diagIntervalHandle);
   if (server) {
     server.close(() => {
       log.info('Server closed');
@@ -1433,5 +1712,15 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 server = app.listen(PORT, () => {
-  log.info('repo-bridge started', { port: PORT, version: '0.4.0' });
+  log.info('repo-bridge started', { port: PORT, version: '0.6.0' });
+
+  // Start self-diagnosis loop if configured
+  if (DIAG_INTERVAL_MS > 0) {
+    log.info('Starting self-diagnosis loop', { intervalMs: DIAG_INTERVAL_MS });
+    runBackgroundDiagnosis(); // Run immediately on startup
+    diagIntervalHandle = setInterval(runBackgroundDiagnosis, DIAG_INTERVAL_MS);
+  }
 });
+
+// Export for testing
+module.exports = { app, server };

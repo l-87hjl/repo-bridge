@@ -703,6 +703,138 @@ async function appendToFile({ owner, repo, branch, path, content, separator, mes
   };
 }
 
+/**
+ * Get the full recursive tree of a repo/branch in a single GitHub API call.
+ * Uses the Git Trees API with recursive=1 for O(1) traversal.
+ * Returns flat list of all files with paths, SHAs, sizes, and types.
+ */
+async function getRepoTree({ owner, repo, branch, installationId }) {
+  const context = { operation: 'getRepoTree', owner, repo, branch };
+  log.info('Fetching recursive repo tree', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  // Get the branch ref to find the tree SHA
+  const refData = await withRetry(
+    () => octokit.rest.git.getRef({ owner, repo, ref: `heads/${branch}` }),
+    { ...context, step: 'getRef' }
+  );
+  const commitSha = refData.data.object.sha;
+
+  // Fetch the full recursive tree
+  const treeData = await withRetry(
+    () => octokit.rest.git.getTree({ owner, repo, tree_sha: commitSha, recursive: '1' }),
+    { ...context, step: 'getTree' }
+  );
+
+  const entries = treeData.data.tree.map(item => ({
+    path: item.path,
+    type: item.type === 'tree' ? 'dir' : 'file',
+    sha: item.sha,
+    size: item.size || 0,
+  }));
+
+  const durationMs = Date.now() - startMs;
+  log.info('Repo tree fetched', { ...context, durationMs, entryCount: entries.length, truncated: !!treeData.data.truncated });
+
+  return {
+    success: true,
+    owner, repo, branch,
+    commitSha,
+    truncated: !!treeData.data.truncated,
+    totalEntries: entries.length,
+    entries,
+  };
+}
+
+/**
+ * Delete a single file from a repo/branch.
+ * Reads the file first to get the current SHA (required by GitHub API).
+ */
+async function deleteOneFile({ owner, repo, branch, path, message, installationId }) {
+  const context = { operation: 'deleteOneFile', owner, repo, branch, path };
+  log.info('Deleting file', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  // Must get the current SHA to delete
+  const sha = await withRetry(
+    () => getExistingFileSha(octokit, { owner, repo, path, branch }),
+    { ...context, step: 'getExistingFileSha' }
+  );
+
+  if (!sha) {
+    const err = new Error(`File not found: ${path}`);
+    err.status = 404;
+    throw err;
+  }
+
+  const r = await withRetry(
+    () => octokit.rest.repos.deleteFile({
+      owner, repo, path, message, sha, branch,
+    }),
+    { ...context, step: 'deleteFile' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('File deleted', { ...context, durationMs });
+
+  return {
+    success: true,
+    path, branch,
+    commitSha: r?.data?.commit?.sha || null,
+  };
+}
+
+/**
+ * Server-side auto-diff update: reads current file, accepts new content,
+ * computes diff server-side, and commits. Eliminates client-side diff computation.
+ * The client never needs to construct patch hunks or worry about context mismatch.
+ */
+async function updateFile({ owner, repo, branch, path, content, message, installationId }) {
+  const context = { operation: 'updateFile', owner, repo, branch, path };
+  log.info('Updating file (server-side diff)', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  // Read current file to get SHA (required for update)
+  const current = await readOneFile({ owner, repo, branch, path, installationId });
+
+  if (current.content === content) {
+    const durationMs = Date.now() - startMs;
+    log.info('Update resulted in no changes', { ...context, durationMs });
+    return {
+      success: true,
+      committed: false,
+      path, branch,
+      message: 'Content identical to current file — no changes committed',
+    };
+  }
+
+  const r = await withRetry(
+    () => octokit.rest.repos.createOrUpdateFileContents({
+      owner, repo, path, message,
+      content: Buffer.from(content, 'utf8').toString('base64'),
+      branch,
+      ...(current.sha ? { sha: current.sha } : {}),
+    }),
+    { ...context, step: 'createOrUpdateFileContents' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('File updated', { ...context, durationMs });
+
+  return {
+    success: true,
+    committed: true,
+    path, branch,
+    commitSha: r?.data?.commit?.sha || null,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
@@ -713,6 +845,9 @@ module.exports = {
   patchReplace,
   patchDiff,
   appendToFile,
+  getRepoTree,
+  deleteOneFile,
+  updateFile,
   invalidateTokenCache,
   // Exported for testing
   isTransientError,
