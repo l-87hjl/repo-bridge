@@ -14,9 +14,13 @@ For production deployments, replace with your deployed URL.
 
 All endpoints accept an `owner/repo` parameter, enabling operations across multiple repositories. Key multi-repo endpoints:
 
-- **`/batchRead`** (or `/batch/read`) — Read up to 10 files from any combination of repos in one call
+- **`/batchRead`** (or `/batch/read`) — Read up to 25 files from any combination of repos in one call
 - **`/copy`** — Copy a file from one repo to another in one call
 - **`/apply`** with `changes[]` — Write multiple files to a repo in one call
+- **`/search`** — Search content across multiple repos with line-accurate results
+- **`/symbols`** — Discover symbols (functions, classes) across repos
+- **`/compare`** — Compare a file between two repos or branches
+- **`/compareStructure`** — Compare directory structures between repos
 - **`/dryRun`** (or `/github/dryrun`) — Preview changes without committing
 
 See [MULTI_REPO_GUIDE.md](MULTI_REPO_GUIDE.md) for patterns and examples.
@@ -61,6 +65,14 @@ If `READ_ONLY_REPOS` is set, the specified repositories can be read via `/read` 
 READ_ONLY_REPOS=myorg/config-repo,myorg/reference-docs
 ```
 
+### Patch-Only Paths
+
+If `PATCH_ONLY_PATHS` is set, the specified file paths cannot be overwritten via `/apply` — they must be modified using `/patchReplace` or `/patchDiff`. This prevents AI agents from accidentally replacing entire files when they should be making surgical edits.
+
+```env
+PATCH_ONLY_PATHS=src/server.js,src/github.js,config/*
+```
+
 ---
 
 ## Endpoints
@@ -75,7 +87,14 @@ Returns service information and available endpoints.
 {
   "service": "repo-bridge",
   "status": "running",
-  "endpoints": ["/health", "/apply", "/read", "/github/dryrun"]
+  "version": "0.7.0",
+  "endpoints": ["/health", "/metrics", "/apply", "/read", "/readLines", "/blob", "/search", "/symbols", "..."],
+  "capabilities": {
+    "readLines": "Line-accurate file reading with normalization (v0.7.0)",
+    "search": "Cross-repo content search (v0.7.0)",
+    "symbols": "Cross-repo symbol discovery (v0.7.0)",
+    "..."
+  }
 }
 ```
 
@@ -83,15 +102,31 @@ Returns service information and available endpoints.
 
 ### GET /health
 
-Health check endpoint for monitoring.
+Health check endpoint for monitoring. Returns 503 if GitHub connectivity fails.
 
-**Response**
+**Response (200)**
 
 ```json
 {
   "ok": true,
   "service": "repo-bridge",
-  "time": "2024-01-15T10:30:00.000Z"
+  "version": "0.7.0",
+  "time": "2026-01-15T10:30:00.000Z",
+  "uptime": 3600,
+  "github": {
+    "connected": true,
+    "rateLimit": { "remaining": 4500, "limit": 5000, "resetsAt": "..." }
+  }
+}
+```
+
+**Response (503)** — GitHub connectivity failure:
+
+```json
+{
+  "ok": false,
+  "service": "repo-bridge",
+  "github": { "connected": false, "error": "..." }
 }
 ```
 
@@ -566,7 +601,7 @@ List files and directories in a repository path. Can target any accessible repo.
 
 ### POST /batchRead
 
-Read multiple files from one or more repositories in a single call. Files are read concurrently. Maximum 10 files per request.
+Read multiple files from one or more repositories in a single call. Files are read concurrently. Maximum 25 files per request.
 
 Also available at `/batch/read` for backward compatibility.
 
@@ -586,7 +621,7 @@ Also available at `/batch/read` for backward compatibility.
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `files` | array | Yes | Array of file objects (max 10) |
+| `files` | array | Yes | Array of file objects (max 25) |
 | `files[].repo` | string | Yes | Repository in `owner/repo` format |
 | `files[].path` | string | Yes | File path within the repository |
 | `files[].branch` | string | No | Target branch (defaults to `main`) |
@@ -713,6 +748,461 @@ Multi-file (with `changes[]`):
 
 ---
 
+### GET /metrics
+
+Service observability endpoint. Returns uptime, memory usage, version, GitHub rate-limit status with warning thresholds, and last diagnostic snapshot.
+
+**Response (200)**
+
+```json
+{
+  "success": true,
+  "service": "repo-bridge",
+  "version": "0.7.0",
+  "uptime": 3600,
+  "time": "2026-01-15T10:30:00.000Z",
+  "memory": { "rss": 52428800, "heapUsed": 20971520, "heapTotal": 33554432, "external": 1048576 },
+  "github": {
+    "connected": true,
+    "rateLimit": {
+      "remaining": 4500,
+      "limit": 5000,
+      "resetsAt": "2026-01-15T11:00:00.000Z",
+      "warning": false,
+      "warningThreshold": 500
+    }
+  },
+  "diagnosis": { "snapshot": null, "capturedAt": null },
+  "config": { "patchOnlyPaths": [], "readOnlyRepos": [], "diagIntervalMs": 0 }
+}
+```
+
+Rate-limit `warning` is `true` when remaining < 10% of limit.
+
+---
+
+### POST /patchReplace
+
+Apply search-and-replace operations to a file and commit. Single-purpose endpoint — GPT Actions safe (flat schema, no conditional fields).
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "path": "src/config.js",
+  "message": "Change port",
+  "operations": [
+    { "search": "port: 3000", "replace": "port: 8080" }
+  ]
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `path` | string | Yes | File path to patch |
+| `message` | string | Yes | Commit message |
+| `operations` | array | Yes | Array of `{ search, replace }` objects |
+| `branch` | string | No | Target branch (defaults to `main`) |
+
+**Response (200)**
+
+```json
+{ "success": true, "committed": true, "path": "src/config.js", "branch": "main", "commitSha": "abc123" }
+```
+
+**Error (409)** — Search string not found.
+
+---
+
+### POST /patchDiff
+
+Apply a unified diff patch to a file and commit. Single-purpose endpoint — GPT Actions safe.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "path": "src/app.js",
+  "message": "Fix bug",
+  "patch": "@@ -10,3 +10,4 @@\n const express = require('express');\n-const port = 3000;\n+const port = process.env.PORT || 3000;\n+const host = '0.0.0.0';\n"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `path` | string | Yes | File path to patch |
+| `message` | string | Yes | Commit message |
+| `patch` | string | Yes | Unified diff string |
+| `branch` | string | No | Target branch (defaults to `main`) |
+
+**Response (200)**
+
+```json
+{ "success": true, "committed": true, "path": "src/app.js", "branch": "main", "commitSha": "def456" }
+```
+
+**Error (409)** — Context mismatch (file changed since diff was created).
+
+---
+
+### POST /repoTree
+
+Get the full recursive file tree for a repository in a single API call. Uses the Git Trees API with `recursive=1`.
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo", "branch": "main" }
+```
+
+**Response (200)**
+
+```json
+{
+  "success": true,
+  "owner": "owner", "repo": "repo", "branch": "main",
+  "commitSha": "abc123",
+  "truncated": false,
+  "totalEntries": 42,
+  "entries": [
+    { "path": "README.md", "type": "file", "sha": "aaa", "size": 1200 },
+    { "path": "src", "type": "dir", "sha": "bbb", "size": 0 },
+    { "path": "src/server.js", "type": "file", "sha": "ccc", "size": 45000 }
+  ]
+}
+```
+
+---
+
+### POST /deleteFile
+
+Delete a file from a repository and commit the deletion.
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo", "path": "obsolete.txt", "message": "Remove obsolete file" }
+```
+
+**Response (200)**
+
+```json
+{ "success": true, "path": "obsolete.txt", "branch": "main", "commitSha": "ghi789" }
+```
+
+---
+
+### POST /updateFile
+
+Update a file with new content. The server reads the current file, accepts full new content, and handles the diff/commit server-side. Eliminates client-side diff computation and context mismatch.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "path": "src/config.js",
+  "content": "// Updated config file\nmodule.exports = { port: 8080 };",
+  "message": "Update config"
+}
+```
+
+If content is identical to the current file, returns `{ committed: false }` without making a commit.
+
+---
+
+### POST /readLines
+
+Read a file with line-accurate metadata. Normalizes line endings (CRLF to LF), returns blob SHA for drift detection, and supports extracting specific line ranges.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "path": "src/server.js",
+  "startLine": 10,
+  "endLine": 20
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `path` | string | Yes | File path |
+| `branch` | string | No | Target branch (defaults to `main`) |
+| `startLine` | integer | No | 1-based start line (inclusive) |
+| `endLine` | integer | No | 1-based end line (inclusive) |
+| `normalize` | boolean | No | Normalize line endings (defaults to `true`) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "owner", "repo": "repo", "branch": "main", "path": "src/server.js",
+  "blobSha": "abc123",
+  "size": 45000,
+  "totalLines": 2054,
+  "normalized": true,
+  "startLine": 10,
+  "endLine": 20,
+  "content": "line 10 text\nline 11 text\n...",
+  "lines": [
+    { "lineNumber": 10, "text": "line 10 text" },
+    { "lineNumber": 11, "text": "line 11 text" }
+  ]
+}
+```
+
+---
+
+### POST /blob
+
+Retrieve a raw blob by SHA. Uses the Git Blobs API which supports files up to 100MB (vs 1MB for the Contents API).
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo", "sha": "abc123def456" }
+```
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "owner", "repo": "repo",
+  "sha": "abc123def456",
+  "size": 45000,
+  "content": "decoded file content...",
+  "encoding": "utf8"
+}
+```
+
+---
+
+### POST /search
+
+Search for content across one or more repos. Uses GitHub Code Search API for discovery, then fetches raw files for line-accurate results.
+
+**Request Body**
+
+```json
+{
+  "query": "handleError",
+  "repos": ["owner/repo1", "owner/repo2"],
+  "options": {
+    "language": "javascript",
+    "maxResults": 20,
+    "contextLines": 2
+  }
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `query` | string | Yes | Search term |
+| `repos` | array | Yes | Array of `"owner/repo"` strings (max 10) |
+| `options.language` | string | No | Filter by language |
+| `options.extension` | string | No | Filter by file extension |
+| `options.maxResults` | integer | No | Max results (defaults to 20) |
+| `options.contextLines` | integer | No | Lines of context around matches (defaults to 2) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "query": "handleError",
+  "totalCount": 5,
+  "resultsReturned": 2,
+  "results": [
+    {
+      "repo": "owner/repo1",
+      "path": "src/error.js",
+      "blobSha": "sha123",
+      "branch": "main",
+      "matches": [
+        {
+          "lineNumber": 15,
+          "text": "function handleError(err) {",
+          "context": { "before": ["// Error handler"], "after": ["  console.error(err);"] },
+          "reference": {
+            "ref": "owner/repo1:src/error.js:15",
+            "githubUrl": "https://github.com/owner/repo1/blob/sha123/src/error.js#L15"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+---
+
+### POST /symbols
+
+Discover symbol definitions (functions, classes, interfaces) across repos. Scans source files and extracts symbols with line-accurate references. Supports JavaScript, TypeScript, Python, Go, Ruby, Java, Kotlin, C#, and Rust.
+
+**Request Body**
+
+```json
+{
+  "repos": [
+    { "repo": "owner/repo", "branch": "main", "paths": ["src/"] }
+  ],
+  "options": {
+    "nameFilter": "handle",
+    "extensions": [".js", ".ts"]
+  }
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repos` | array | Yes | Array of repo specs (max 5). String `"owner/repo"` or object `{ repo, branch?, paths? }` |
+| `options.nameFilter` | string | No | Filter symbols by name substring |
+| `options.typeFilter` | array | No | Filter by type: `"function"`, `"class"`, `"interface"`, etc. |
+| `options.extensions` | array | No | File extensions to scan (defaults to common source extensions) |
+| `options.maxFiles` | integer | No | Max files to scan per repo (defaults to 50) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "totalSymbols": 15,
+  "symbols": [
+    {
+      "name": "readOneFile",
+      "type": "function",
+      "lineNumber": 231,
+      "text": "async function readOneFile({ owner, repo, branch, path }) {",
+      "repo": "owner/repo",
+      "path": "src/github.js",
+      "branch": "main",
+      "blobSha": "sha456",
+      "reference": {
+        "ref": "owner/repo:src/github.js:231",
+        "githubUrl": "https://github.com/owner/repo/blob/sha456/src/github.js#L231"
+      }
+    }
+  ]
+}
+```
+
+---
+
+### POST /listBranches
+
+List all branches for a repository with commit SHAs and protection status.
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo" }
+```
+
+**Response (200)**
+
+```json
+{
+  "success": true,
+  "owner": "owner", "repo": "repo",
+  "totalBranches": 3,
+  "branches": [
+    { "name": "main", "sha": "abc123", "protected": true },
+    { "name": "develop", "sha": "def456", "protected": false },
+    { "name": "feature/new-api", "sha": "ghi789", "protected": false }
+  ]
+}
+```
+
+---
+
+### POST /createBranch
+
+Create a new branch from an existing branch.
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo", "branch": "feature/my-change", "fromBranch": "main" }
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `branch` | string | Yes | Name for the new branch |
+| `fromBranch` | string | No | Source branch (defaults to `main`) |
+
+**Response (200)**
+
+```json
+{ "success": true, "owner": "owner", "repo": "repo", "branch": "feature/my-change", "fromBranch": "main", "sha": "abc123" }
+```
+
+---
+
+### POST /createPR
+
+Create a pull request to propose changes for review.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "title": "Add new feature",
+  "head": "feature/my-change",
+  "base": "main",
+  "body": "Description of changes"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `title` | string | Yes | PR title |
+| `head` | string | Yes | Branch with changes |
+| `base` | string | No | Target branch (defaults to `main`) |
+| `body` | string | No | PR description |
+
+**Response (200)**
+
+```json
+{
+  "success": true,
+  "owner": "owner", "repo": "repo",
+  "number": 42,
+  "url": "https://github.com/owner/repo/pull/42",
+  "head": "feature/my-change",
+  "base": "main",
+  "title": "Add new feature"
+}
+```
+
+---
+
+### POST /diagnose
+
+Test connectivity and permissions for a specific repository. Returns detailed diagnostic information about authentication, rate limits, repo access, and file access.
+
+**Request Body**
+
+```json
+{ "repo": "owner/repo", "path": "README.md" }
+```
+
+Returns a detailed report with checks for: allowlist, auth, rate limit, repo access, and file access. Includes diagnosis codes and hints for common failures (e.g., `GITHUB_APP_NOT_INSTALLED_ON_REPO`, `BRANCH_MISMATCH`).
+
+---
+
 ## Error Codes
 
 | HTTP Code | Error Type | Description |
@@ -724,13 +1214,25 @@ Multi-file (with `changes[]`):
 | 404 | NotFound | Unknown endpoint or file not found |
 | 409 | ShaConflict | File SHA mismatch (expectedSha guard failed) |
 | 409 | PatchConflict | Patch could not be applied (search not found / context mismatch) |
+| 403 | PatchOnlyPath | File requires patch endpoints, not full overwrite |
 | 500 | ServerError | Internal server error |
 | 500 | ApplyFailed | GitHub API call failed (write) |
 | 500 | ReadFailed | GitHub API call failed (read) |
-| 500 | PatchFailed | Patch operation failed |
+| 500 | ReadLinesFailed | Line-accurate read failed |
+| 500 | BlobFailed | Blob retrieval failed |
+| 500 | SearchFailed | Content search failed |
+| 500 | SymbolsFailed | Symbol discovery failed |
+| 500 | PatchFailed | Legacy patch operation failed |
+| 500 | PatchReplaceFailed | Search-and-replace patch failed |
+| 500 | PatchDiffFailed | Unified diff patch failed |
+| 500 | RepoTreeFailed | Recursive tree fetch failed |
+| 500 | DeleteFileFailed | File deletion failed |
+| 500 | UpdateFileFailed | Server-side update failed |
 | 500 | CopyFailed | Cross-repo copy operation failed |
 | 500 | BatchReadFailed | Batch read operation failed |
 | 500 | ListFailed | Directory listing failed |
+| 500 | CompareFailed | File comparison failed |
+| 500 | CompareStructureFailed | Structure comparison failed |
 
 ---
 

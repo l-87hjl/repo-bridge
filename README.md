@@ -6,19 +6,51 @@ Repo-bridge is designed as a governed interface between AI agents and GitHub, em
 
 ## Features
 
-- **Multi-repo operations** — Every endpoint accepts `owner/repo`, enabling cross-repo workflows
-- **Batch read** — Read up to 10 files from any combination of repos in one call (`/batch/read`)
+### Core File Operations
+- **Read** files from any accessible GitHub repository (`/read`)
+- **Line-accurate read** with CRLF normalization, blob SHA drift detection, line range extraction (`/readLines`)
+- **Blob retrieval** by SHA via Git Blobs API — supports files up to 100MB (`/blob`)
+- **Create or update** files in GitHub repositories via REST API (`/apply`)
+- **Server-side auto-diff** — send full content, server handles diffing (`/updateFile`)
+- **Delete files** directly without patch gymnastics (`/deleteFile`)
+- **List** directory contents for repository exploration (`/list`)
+- **Recursive tree** — full file tree with SHAs in one API call via Git Trees API (`/repoTree`)
+- **Batch read** — Read up to 25 files from any combination of repos in one call (`/batchRead`)
 - **Cross-repo copy** — Copy files between repositories in a single call (`/copy`)
 - **Multi-file writes** — Write multiple files per commit with `changes[]` array
-- **Read** files from any accessible GitHub repository
-- **List** directory contents for repository exploration
-- **Create or update** files in GitHub repositories via REST API
+
+### Patching
+- **Search-and-replace** — GPT Actions safe, flat schema (`/patchReplace`)
+- **Unified diff** — GPT Actions safe, flat schema (`/patchDiff`)
+- **Legacy combined** — Both modes in one endpoint (`/patch`)
+
+### Cross-Repo Intelligence
+- **Content search** — Search across repos with line-accurate results (`/search`)
+- **Symbol discovery** — Find functions, classes, interfaces across repos (`/symbols`)
+- **File comparison** — Compare files between repos or branches (`/compare`)
+- **Structure comparison** — Compare directory structures (`/compareStructure`)
+
+### Multi-Repo Coordination
+- **List branches** — Discover all branches with commit SHAs (`/listBranches`)
+- **Create branches** — Create feature branches from any ref (`/createBranch`)
+- **Create pull requests** — Propose changes for review (`/createPR`)
+
+### Observability & Governance
+- **Metrics** — Uptime, memory, GitHub rate-limit with warning thresholds (`/metrics`)
+- **Diagnostics** — Test connectivity and permissions for any repo (`/diagnose`)
+- **Self-diagnosis** — Background health monitoring loop (configurable via `DIAG_INTERVAL_MS`)
+- **Patch-only enforcement** — Protect critical files from full overwrites (`PATCH_ONLY_PATHS`)
+- **SHA guard** — Optimistic concurrency via `expectedSha` on `/apply`
+
+### Infrastructure
 - GitHub App authentication (no personal access tokens needed)
-- Dry-run mode for previewing changes without committing (guaranteed safe - no API calls)
+- Dry-run mode for previewing changes without committing (guaranteed safe — no API calls)
 - Read-only repository mode for protecting sensitive repos
 - API authentication via Bearer token
 - Repository and path allowlists for access control
+- GPT Actions compatible OpenAPI 3.0.1 schemas (flat, deterministic, no conditional fields)
 - Security headers via Helmet
+- 75 tests (Jest + Supertest)
 - Designed for deployment on Render
 
 ## Prerequisites
@@ -63,6 +95,12 @@ ALLOWED_REPOS=myorg/*,user/repo   # Restrict to specific repos
 ALLOWED_PATHS=src/*,docs/*        # Restrict to specific paths
 READ_ONLY_REPOS=myorg/config      # Allow read but block writes
 
+# Optional governance
+PATCH_ONLY_PATHS=src/server.js,config/* # Block full overwrites, require /patchReplace or /patchDiff
+
+# Optional observability
+DIAG_INTERVAL_MS=300000           # Background self-diagnosis every 5min (0=disabled)
+
 # Optional server config
 PORT=3000                         # Defaults to 3000
 ```
@@ -77,16 +115,33 @@ The server will start on `http://localhost:3000`.
 
 ## API Endpoints
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/` | Service info and available endpoints |
-| GET | `/health` | Health check with timestamp |
-| POST | `/read` | Read a file from any accessible repo |
-| POST | `/list` | List directory contents of any repo |
-| POST | `/batchRead` | Read up to 10 files from multiple repos |
-| POST | `/copy` | Copy a file between repositories |
-| POST | `/apply` | Create or update file(s) in a repo |
-| POST | `/dryRun` | Preview changes without committing |
+| Method | Endpoint | Description | Since |
+|--------|----------|-------------|-------|
+| GET | `/` | Service info, endpoints, and capabilities | v0.1 |
+| GET | `/health` | Health check with GitHub connectivity status | v0.1 |
+| GET | `/metrics` | Uptime, memory, rate-limit, diagnostics | v0.6 |
+| POST | `/read` | Read a file from any accessible repo | v0.1 |
+| POST | `/readLines` | Line-accurate read with normalization and blob SHA | v0.7 |
+| POST | `/blob` | Retrieve a raw blob by SHA (up to 100MB) | v0.7 |
+| POST | `/list` | List directory contents of any repo | v0.1 |
+| POST | `/repoTree` | Full recursive file tree in one API call | v0.6 |
+| POST | `/batchRead` | Read up to 25 files from multiple repos | v0.1 |
+| POST | `/apply` | Create or update file(s) in a repo | v0.1 |
+| POST | `/updateFile` | Update with server-side auto-diff | v0.6 |
+| POST | `/deleteFile` | Delete a file from a repo | v0.6 |
+| POST | `/patchReplace` | Search-and-replace patch (GPT Actions safe) | v0.5 |
+| POST | `/patchDiff` | Unified diff patch (GPT Actions safe) | v0.5 |
+| POST | `/patch` | Combined patch (legacy, both modes) | v0.5 |
+| POST | `/copy` | Copy a file between repositories | v0.1 |
+| POST | `/search` | Cross-repo content search with line references | v0.7 |
+| POST | `/symbols` | Cross-repo symbol discovery | v0.7 |
+| POST | `/compare` | Compare a file between repos/branches | v0.4 |
+| POST | `/compareStructure` | Compare directory structures | v0.4 |
+| POST | `/listBranches` | List all branches for a repo | v0.7 |
+| POST | `/createBranch` | Create a new branch from a ref | v0.7 |
+| POST | `/createPR` | Create a pull request | v0.7 |
+| POST | `/diagnose` | Test connectivity and permissions | v0.3 |
+| POST | `/dryRun` | Preview changes without committing | v0.1 |
 
 See [docs/API.md](docs/API.md) for detailed API documentation.
 
@@ -168,27 +223,32 @@ Dry-run mode is guaranteed safe - it makes no GitHub API calls and only returns 
 ```
 repo-bridge/
 ├── src/
-│   ├── server.js              # Express server and API routes
-│   └── github.js              # GitHub API integration
+│   ├── server.js              # Express server with all route handlers
+│   ├── github.js              # GitHub API service functions
+│   ├── normalize.js           # Content normalization, symbol discovery, line mapping
+│   └── logger.js              # Structured JSON logging
+├── tests/
+│   ├── server.test.js         # Integration tests (33 tests, Jest + Supertest)
+│   └── normalize.test.js      # Normalize module tests (42 tests)
 ├── docs/
 │   ├── API.md                 # API documentation
+│   ├── CHANGELOG_AI.md        # AI change log (append-only)
+│   ├── chatgpt-tool-schema.json           # Primary OpenAPI schema (GPT Actions safe, 3.0.1)
+│   ├── chatgpt-tool-schema-working-step01.json  # Mirror of primary schema
+│   ├── chatgpt-tool-schema-detailed-backup.json # Backup schema with typed responses (3.1.0)
 │   ├── README_AI.md           # Instructions for AI agents
 │   ├── MULTI_REPO_GUIDE.md    # Multi-repo analysis patterns
 │   ├── AGENT_SETUP.md         # Multi-layer security setup
 │   ├── STANDARDIZATION_GUIDE.md # Agent repo structure guide
 │   ├── REPO_ACCESS_MAP.md     # Access control matrix
-│   ├── CHATGPT-AGENT-SETUP-RECS # ChatGPT agent setup guidance
-│   ├── CHANGELOG_AI.md        # AI change log (append-only)
-│   ├── STATE.md               # Repository state summary
-│   └── chatgpt-tool-schema.json  # OpenAPI schema for integrations
+│   └── STATE.md               # Repository state summary
 ├── templates/                 # Agent mechanism repo templates
 │   ├── agent-boot/            # Boot repo templates (rules, protocols)
 │   ├── agent-contract/        # Contract repo templates (specs)
 │   └── agent-workspace/       # Workspace repo templates (active state)
-├── archive/                   # Archived old code versions
 ├── .env.example               # Example environment configuration
 ├── .gitignore
-├── package.json
+├── package.json               # v0.7.0
 └── README.md
 ```
 
@@ -210,6 +270,16 @@ For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
 - Configure `READ_ONLY_REPOS` to protect boot and contract repos while allowing workspace writes
 - See [docs/CHATGPT-AGENT-SETUP-RECS](docs/CHATGPT-AGENT-SETUP-RECS) for instruction/file/action division guidance
 
+## Testing
+
+```bash
+npm test
+```
+
+Runs 75 tests across 2 test suites:
+- **tests/server.test.js** — 33 integration tests covering all endpoints (mocked GitHub API)
+- **tests/normalize.test.js** — 42 unit tests for content normalization, line mapping, symbol discovery
+
 ## Deployment on Render
 
 1. Create a new Web Service on Render
@@ -225,6 +295,8 @@ For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
    - `ALLOWED_REPOS` (recommended - restrict which repos can be modified)
    - `ALLOWED_PATHS` (optional - restrict which paths can be modified)
    - `READ_ONLY_REPOS` (optional - allow read but block writes on specific repos)
+   - `PATCH_ONLY_PATHS` (optional - require patch endpoints for protected files)
+   - `DIAG_INTERVAL_MS` (optional - background self-diagnosis interval in ms)
 
 ## Troubleshooting
 

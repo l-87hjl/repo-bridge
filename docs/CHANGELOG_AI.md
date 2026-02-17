@@ -43,3 +43,44 @@ approach succeeds.
 
 **Design Principle:** Separate transport contract (agent-facing API) from behavioral engine (backend
 logic). GPT sees a stable RPC surface. Backend retains intelligence and enforcement.
+
+## [2026-02-17] v0.5.0 — GPT Actions Safe Endpoints
+
+**Files Changed:** src/server.js, src/github.js, docs/chatgpt-tool-schema.json
+**Summary:** Split `/patch` into `/patchReplace` and `/patchDiff` for GPT Actions compatibility.
+Each has a flat, deterministic schema — no conditional fields, no enums, no optional mode flags.
+Extracted `applySearchReplace()` as a pure function for testability.
+
+## [2026-02-17] v0.6.0 — Observability, Governance, and New Endpoints
+
+**Files Changed:** src/server.js, src/github.js, tests/server.test.js, package.json, docs/chatgpt-tool-schema.json
+**Summary:** Major feature release:
+- `/repoTree` — full recursive file tree via Git Trees API (`recursive=1`), O(1) traversal
+- `/deleteFile` — direct file deletion, no patch gymnastics
+- `/updateFile` — server-side auto-diff, eliminates client-side context mismatch
+- `GET /metrics` — uptime, memory, version, GitHub rate-limit with warning thresholds, last diagnostic snapshot
+- Background self-diagnosis loop (configurable via `DIAG_INTERVAL_MS`)
+- `PATCH_ONLY_PATHS` enforcement — blocks full overwrites on protected paths
+- batchRead limit raised from 10 to 25 files
+- Jest + Supertest integration tests (21 tests)
+- OpenAPI schema managed as flat GPT-safe primary (3.0.1), detailed backup (3.1.0)
+
+## [2026-02-17] v0.7.0 — Multi-Repo Coordination + Line-Accuracy Features
+
+**Files Changed:** src/server.js, src/github.js, src/normalize.js (new), tests/server.test.js, tests/normalize.test.js (new), package.json, docs/chatgpt-tool-schema.json
+**Summary:** Integrates features from two parallel branches into a unified v0.7.0 release:
+
+**Multi-repo coordination (from this branch):**
+- `/listBranches` — list all branches with commit SHAs and protection status
+- `/createBranch` — create feature branches from any existing ref
+- `/createPR` — create pull requests for governance-safe change proposals
+
+**Line-accuracy features (integrated from `claude/fix-line-number-accuracy-gq86H`):**
+- `/readLines` — line-accurate file reading with CRLF→LF normalization, blob SHA drift detection, line range extraction
+- `/blob` — direct blob retrieval by SHA via Git Blobs API (supports files up to 100MB)
+- `/search` — cross-repo content search via GitHub Code Search API with line-accurate results
+- `/symbols` — cross-repo symbol discovery (functions, classes, interfaces) for JS/TS, Python, Go, Ruby, Java/Kotlin/C#, Rust
+
+**New module:** `src/normalize.js` — content normalization, line mapping, multi-language symbol patterns, drift detection
+
+**Test coverage:** 75 tests (42 normalize + 33 server integration)
