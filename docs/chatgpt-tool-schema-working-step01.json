@@ -65,7 +65,7 @@
     "/batchRead": {
       "post": {
         "operationId": "batchRead",
-        "summary": "Read multiple files from one or more repositories.",
+        "summary": "Read up to 25 files from one or more repositories in one call.",
         "requestBody": {
           "required": true,
           "content": {
