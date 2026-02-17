@@ -270,6 +270,10 @@ For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
 - Configure `READ_ONLY_REPOS` to protect boot and contract repos while allowing workspace writes
 - See [docs/CHATGPT-AGENT-SETUP-RECS](docs/CHATGPT-AGENT-SETUP-RECS) for instruction/file/action division guidance
 
+### Known Agent Workarounds
+
+- **ChatGPT GPT tool schema caching:** ChatGPT GPTs load their tool/action schemas once when a thread starts. If you update the GPT's action schema (e.g., adding new endpoints to repo-bridge), ChatGPT will typically report that the new endpoints are unavailable and suggest starting a new thread. However, a mid-thread refresh is possible: ask the agent to re-invoke the tool (e.g., *"Can you re-call the tool JIT?"*), then follow up with *"Can you give me your full list of calls?"*. This appears to force a schema reload within the existing thread, making newly added endpoints available without starting over.
+
 ## Testing
 
 ```bash
