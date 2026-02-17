@@ -1045,8 +1045,8 @@ async function handleBatchRead(req, res) {
       return badRequest(res, 'Required: files[] array with objects containing repo (owner/name) and path');
     }
 
-    if (files.length > 10) {
-      return badRequest(res, 'Maximum 10 files per batch read request');
+    if (files.length > 25) {
+      return badRequest(res, 'Maximum 25 files per batch read request');
     }
 
     const parsed = [];
