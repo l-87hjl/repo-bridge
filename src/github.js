@@ -835,6 +835,115 @@ async function updateFile({ owner, repo, branch, path, content, message, install
   };
 }
 
+/**
+ * List branches for a repository.
+ * Returns branch names and their commit SHAs.
+ */
+async function listBranches({ owner, repo, installationId }) {
+  const context = { operation: 'listBranches', owner, repo };
+  log.info('Listing branches', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  const branches = [];
+  let page = 1;
+  const perPage = 100;
+
+  // Paginate through all branches
+  while (true) {
+    const r = await withRetry(
+      () => octokit.rest.repos.listBranches({ owner, repo, per_page: perPage, page }),
+      { ...context, step: 'listBranches', page }
+    );
+    for (const b of r.data) {
+      branches.push({
+        name: b.name,
+        sha: b.commit.sha,
+        protected: b.protected,
+      });
+    }
+    if (r.data.length < perPage) break;
+    page++;
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.info('Branches listed', { ...context, durationMs, count: branches.length });
+
+  return {
+    success: true,
+    owner, repo,
+    totalBranches: branches.length,
+    branches,
+  };
+}
+
+/**
+ * Create a new branch from an existing ref (branch name or commit SHA).
+ * Uses the Git Refs API.
+ */
+async function createBranch({ owner, repo, branch, fromBranch, installationId }) {
+  const context = { operation: 'createBranch', owner, repo, branch, fromBranch };
+  log.info('Creating branch', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  // Resolve the source branch to a commit SHA
+  const refData = await withRetry(
+    () => octokit.rest.git.getRef({ owner, repo, ref: `heads/${fromBranch}` }),
+    { ...context, step: 'getRef' }
+  );
+  const sha = refData.data.object.sha;
+
+  // Create the new branch
+  const r = await withRetry(
+    () => octokit.rest.git.createRef({ owner, repo, ref: `refs/heads/${branch}`, sha }),
+    { ...context, step: 'createRef' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('Branch created', { ...context, durationMs, sha });
+
+  return {
+    success: true,
+    owner, repo,
+    branch,
+    fromBranch,
+    sha,
+  };
+}
+
+/**
+ * Create a pull request.
+ * Requires the head branch to already exist with commits.
+ */
+async function createPullRequest({ owner, repo, title, body, head, base, installationId }) {
+  const context = { operation: 'createPullRequest', owner, repo, head, base };
+  log.info('Creating pull request', context);
+  const startMs = Date.now();
+
+  const octokit = await getInstallationOctokit({ installationId });
+
+  const r = await withRetry(
+    () => octokit.rest.pulls.create({ owner, repo, title, body: body || '', head, base }),
+    { ...context, step: 'createPull' }
+  );
+
+  const durationMs = Date.now() - startMs;
+  log.info('Pull request created', { ...context, durationMs, number: r.data.number });
+
+  return {
+    success: true,
+    owner, repo,
+    number: r.data.number,
+    url: r.data.html_url,
+    head,
+    base,
+    title,
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
@@ -848,6 +957,9 @@ module.exports = {
   getRepoTree,
   deleteOneFile,
   updateFile,
+  listBranches,
+  createBranch,
+  createPullRequest,
   invalidateTokenCache,
   // Exported for testing
   isTransientError,

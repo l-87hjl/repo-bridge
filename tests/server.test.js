@@ -20,6 +20,9 @@ jest.mock('../src/github', () => ({
   appendToFile: jest.fn(),
   applyUnifiedDiff: jest.fn(),
   applySearchReplace: jest.fn(),
+  listBranches: jest.fn(),
+  createBranch: jest.fn(),
+  createPullRequest: jest.fn(),
   invalidateTokenCache: jest.fn(),
   isTransientError: jest.fn(),
   withRetry: jest.fn(),
@@ -213,6 +216,84 @@ describe('POST /updateFile', () => {
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
     expect(res.body.commitSha).toBe('jkl012');
+  });
+});
+
+describe('POST /listBranches', () => {
+  it('returns 400 if repo is missing', async () => {
+    const res = await request(app)
+      .post('/listBranches')
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('calls listBranches on valid input', async () => {
+    const github = require('../src/github');
+    github.listBranches.mockResolvedValueOnce({
+      success: true, owner: 'owner', repo: 'repo',
+      totalBranches: 2,
+      branches: [
+        { name: 'main', sha: 'aaa', protected: true },
+        { name: 'dev', sha: 'bbb', protected: false },
+      ],
+    });
+
+    const res = await request(app)
+      .post('/listBranches')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.branches).toHaveLength(2);
+  });
+});
+
+describe('POST /createBranch', () => {
+  it('returns 400 if branch name is missing', async () => {
+    const res = await request(app)
+      .post('/createBranch')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('calls createBranch on valid input', async () => {
+    const github = require('../src/github');
+    github.createBranch.mockResolvedValueOnce({
+      success: true, owner: 'owner', repo: 'repo',
+      branch: 'feature/test', fromBranch: 'main', sha: 'abc123',
+    });
+
+    const res = await request(app)
+      .post('/createBranch')
+      .send({ repo: 'owner/repo', branch: 'feature/test' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.branch).toBe('feature/test');
+  });
+});
+
+describe('POST /createPR', () => {
+  it('returns 400 if required fields missing', async () => {
+    const res = await request(app)
+      .post('/createPR')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('calls createPullRequest on valid input', async () => {
+    const github = require('../src/github');
+    github.createPullRequest.mockResolvedValueOnce({
+      success: true, owner: 'owner', repo: 'repo',
+      number: 42, url: 'https://github.com/owner/repo/pull/42',
+      head: 'feature/test', base: 'main', title: 'Fix things',
+    });
+
+    const res = await request(app)
+      .post('/createPR')
+      .send({ repo: 'owner/repo', title: 'Fix things', head: 'feature/test' });
+    expect(res.status).toBe(200);
+    expect(res.body.success).toBe(true);
+    expect(res.body.number).toBe(42);
+    expect(res.body.url).toContain('pull/42');
   });
 });
 

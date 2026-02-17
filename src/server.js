@@ -73,8 +73,11 @@ app.get('/', (req, res) => {
     service: 'repo-bridge',
     status: 'running',
     version: '0.6.0',
-    endpoints: ['/health', '/metrics', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    endpoints: ['/health', '/metrics', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
     capabilities: {
+      listBranches: 'List all branches for a repo via /listBranches (v0.7.0)',
+      createBranch: 'Create feature branches via /createBranch (v0.7.0)',
+      createPR: 'Propose changes via pull requests with /createPR (v0.7.0)',
       metrics: 'Service observability with rate-limit warnings via /metrics (v0.6.0)',
       repoTree: 'Full recursive file tree with SHAs in one call via /repoTree (v0.6.0)',
       deleteFile: 'Direct file deletion via /deleteFile — no patch gymnastics (v0.6.0)',
@@ -1632,6 +1635,122 @@ app.post('/diagnose', requireAuth, async (req, res) => {
   }
 
   return res.json(report);
+});
+
+// ─── Multi-repo coordination endpoints ────────────────────────────────────────
+
+/**
+ * POST /listBranches - List all branches for a repository.
+ *
+ * Input: { repo, branch? }
+ */
+app.post('/listBranches', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const installationId = b.installationId;
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (in owner/repo format).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { listBranches } = require('./github');
+    const result = await listBranches({ owner, repo, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'Repository not found' });
+    }
+    return errorResponse(res, 500, 'ListBranchesFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /createBranch - Create a new branch from an existing branch.
+ *
+ * Input: { repo, branch, fromBranch }
+ */
+app.post('/createBranch', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch;
+    const fromBranch = b.fromBranch || DEFAULT_BRANCH;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !branch) {
+      return badRequest(res, 'Required: repo, branch (new branch name). Optional: fromBranch (defaults to main).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { createBranch } = require('./github');
+    const result = await createBranch({ owner, repo, branch, fromBranch, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'Repository or source branch not found' });
+    }
+    if (e.status === 422) {
+      return res.status(422).json({ success: false, error: 'already_exists', message: `Branch '${req.body.branch}' already exists` });
+    }
+    return errorResponse(res, 500, 'CreateBranchFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /createPR - Create a pull request.
+ *
+ * Input: { repo, title, head, base, body? }
+ */
+app.post('/createPR', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const title = b.title;
+    const head = b.head;
+    const base = b.base || DEFAULT_BRANCH;
+    const body = b.body;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !title || !head) {
+      return badRequest(res, 'Required: repo, title, head (source branch). Optional: base (defaults to main), body.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { createPullRequest } = require('./github');
+    const result = await createPullRequest({ owner, repo, title, body, head, base, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'Repository or branch not found' });
+    }
+    if (e.status === 422) {
+      return res.status(422).json({ success: false, error: 'validation_failed', message: e.message });
+    }
+    return errorResponse(res, 500, 'CreatePRFailed', e, { requestId: req.requestId });
+  }
 });
 
 // ─── Catch-all and error handler ──────────────────────────────────────────────

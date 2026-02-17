@@ -401,6 +401,86 @@
           "404": { "description": "File not found" }
         }
       }
+    },
+
+    "/listBranches": {
+      "post": {
+        "operationId": "listBranches",
+        "summary": "List all branches for a repository with commit SHAs.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "List of branches" }
+        }
+      }
+    },
+
+    "/createBranch": {
+      "post": {
+        "operationId": "createBranch",
+        "summary": "Create a new branch from an existing branch.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "branch"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "branch": { "type": "string" },
+                  "fromBranch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Branch created" },
+          "422": { "description": "Branch already exists" }
+        }
+      }
+    },
+
+    "/createPR": {
+      "post": {
+        "operationId": "createPR",
+        "summary": "Create a pull request to propose changes for review.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "title", "head"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "title": { "type": "string" },
+                  "head": { "type": "string" },
+                  "base": { "type": "string" },
+                  "body": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Pull request created" },
+          "422": { "description": "Validation failed" }
+        }
+      }
     }
   }
 }
