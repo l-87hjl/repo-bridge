@@ -59,8 +59,11 @@ app.get('/', (req, res) => {
     service: 'repo-bridge',
     status: 'running',
     version: '0.5.0',
-    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
+    endpoints: ['/health', '/apply', '/read', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/webhook', '/diagnose'],
     capabilities: {
+      repoTree: 'Full recursive file tree with SHAs in one call via /repoTree (v0.6.0)',
+      deleteFile: 'Direct file deletion via /deleteFile — no patch gymnastics (v0.6.0)',
+      updateFile: 'Server-side auto-diff file update via /updateFile — no context mismatch (v0.6.0)',
       patchReplace: 'Search-and-replace file patching via /patchReplace — flat schema, GPT Actions safe (v0.5.0)',
       patchDiff: 'Unified diff file patching via /patchDiff — flat schema, GPT Actions safe (v0.5.0)',
       patch: 'Legacy combined patch endpoint via /patch — supports both modes (v0.5.0)',
@@ -651,6 +654,139 @@ app.post('/patchDiff', requireAuth, async (req, res) => {
       return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
     }
     return errorResponse(res, 500, 'PatchDiffFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /repoTree - Get the full recursive file tree for a repository.
+ *
+ * Single API call via GitHub Git Trees API (recursive=1).
+ * Returns all files and directories with paths, SHAs, sizes.
+ * Eliminates directory-by-directory traversal.
+ *
+ * Input: { repo, branch? }
+ */
+app.post('/repoTree', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const installationId = b.installationId;
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (in owner/repo format).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { getRepoTree } = require('./github');
+    const result = await getRepoTree({ owner, repo, branch, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'Repository or branch not found' });
+    }
+    return errorResponse(res, 500, 'RepoTreeFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /deleteFile - Delete a file from a repository.
+ *
+ * Single-purpose: deletes one file and commits the deletion.
+ * No patch gymnastics required.
+ *
+ * Input: { repo, path, message, branch? }
+ */
+app.post('/deleteFile', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const message = b.message;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, message.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { deleteOneFile } = require('./github');
+    const result = await deleteOneFile({ owner, repo, branch, path, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    return errorResponse(res, 500, 'DeleteFileFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /updateFile - Update a file with new content using server-side diffing.
+ *
+ * The server reads the current file, accepts the full new content, and commits.
+ * No client-side diff computation needed. No context mismatch possible.
+ * If content is identical, returns success with committed: false.
+ *
+ * Input: { repo, path, content, message, branch? }
+ */
+app.post('/updateFile', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const path = b.path;
+    const content = b.content;
+    const message = b.message;
+    const installationId = b.installationId;
+
+    if (!owner || !repo || !path || !message) {
+      return badRequest(res, 'Required: repo, path, content, message.');
+    }
+    if (typeof content !== 'string') {
+      return badRequest(res, 'content must be a string.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(path)) {
+      return forbidden(res, `Path ${path} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(owner, repo)) {
+      return res.status(403).json({
+        success: false, error: 'unauthorized',
+        message: `Repository ${owner}/${repo} is configured as read-only`,
+      });
+    }
+
+    const { updateFile } = require('./github');
+    const result = await updateFile({ owner, repo, branch, path, content, message, installationId });
+    return res.json(result);
+  } catch (e) {
+    if (e.status === 404) {
+      return res.status(404).json({ success: false, error: 'not_found', message: 'File not found' });
+    }
+    if (e.status === 409) {
+      return res.status(409).json({ success: false, error: 'conflict', message: e.message });
+    }
+    return errorResponse(res, 500, 'UpdateFileFailed', e, { requestId: req.requestId });
   }
 });
 

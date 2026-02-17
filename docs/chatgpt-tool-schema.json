@@ -532,6 +532,171 @@
           }
         }
       }
+    },
+    "/repoTree": {
+      "post": {
+        "operationId": "getRepoTree",
+        "summary": "Get the full recursive file tree for a repository in one call. Returns all files and directories with paths, SHAs, and sizes. Eliminates directory-by-directory traversal.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Recursive tree with all file paths, SHAs, types, and sizes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "commitSha": { "type": "string" },
+                    "truncated": { "type": "boolean" },
+                    "totalEntries": { "type": "integer" },
+                    "entries": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "path": { "type": "string" },
+                          "type": { "type": "string" },
+                          "sha": { "type": "string" },
+                          "size": { "type": "integer" }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/deleteFile": {
+      "post": {
+        "operationId": "deleteFile",
+        "summary": "Delete a file from a repository and commit the deletion. No patch gymnastics required.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "message"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "path": { "type": "string", "description": "File path to delete" },
+                  "message": { "type": "string", "description": "Git commit message for the deletion" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File deleted and committed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "path": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "commitSha": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "error": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/updateFile": {
+      "post": {
+        "operationId": "updateFile",
+        "summary": "Update a file with new content. Server reads the current file and handles diffing automatically. No client-side diff computation needed. No context mismatch possible.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string", "description": "Repository in owner/repo format" },
+                  "path": { "type": "string", "description": "File path to update" },
+                  "content": { "type": "string", "description": "The complete new file content" },
+                  "message": { "type": "string", "description": "Git commit message" },
+                  "branch": { "type": "string", "description": "Target branch. Defaults to main." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "File updated and committed (or no changes needed).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "committed": { "type": "boolean" },
+                    "path": { "type": "string" },
+                    "branch": { "type": "string" },
+                    "commitSha": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "success": { "type": "boolean" },
+                    "error": { "type": "string" },
+                    "message": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     }
   }
 }
