@@ -84,3 +84,22 @@ Extracted `applySearchReplace()` as a pure function for testability.
 **New module:** `src/normalize.js` — content normalization, line mapping, multi-language symbol patterns, drift detection
 
 **Test coverage:** 75 tests (42 normalize + 33 server integration)
+
+## [2026-02-20] v0.8.0 — File Operations + Schema Fixes + Agent Docs
+
+**Files Changed:** src/server.js, src/github.js, tests/server.test.js, package.json, docs/chatgpt-tool-schema.json, docs/README_AI.md, README.md
+**Summary:**
+
+**New endpoint:**
+- `/moveFile` — move or rename a file in one call (same-repo = rename, cross-repo = move)
+
+**Schema fixes (endpoints existed in code but were missing from the OpenAPI schema, invisible to agents):**
+- `/copy` — cross-repo file copy (byte-for-byte exact), existed since v0.1 but never in schema
+- `/dryRun` — preview writes with zero API calls, existed since v0.1 but never in schema
+- `/moveFile` — new
+
+**Documentation:**
+- Rewrote `docs/README_AI.md` from scratch: all 30 endpoints organized by category, `readLines→patchReplace` workflow for accurate patching, multi-repo patterns, best practices
+- Updated `README.md` with `/moveFile` in features and endpoints table
+
+**Test coverage:** 79 tests (42 normalize + 37 server integration)

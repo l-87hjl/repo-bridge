@@ -915,6 +915,55 @@ If content is identical to the current file, returns `{ committed: false }` with
 
 ---
 
+### POST /moveFile
+
+Move or rename a file in one call. Within the same repo, this is a rename. Across repos, it reads from source, writes to destination, then deletes the source.
+
+**Request Body (rename within same repo)**
+
+```json
+{
+  "sourceRepo": "owner/repo",
+  "sourcePath": "old/path/file.js",
+  "destinationPath": "new/path/file.js",
+  "message": "Rename file"
+}
+```
+
+**Request Body (cross-repo move)**
+
+```json
+{
+  "sourceRepo": "org/repo-a",
+  "sourcePath": "src/utils.js",
+  "destinationRepo": "org/repo-b",
+  "destinationPath": "lib/utils.js",
+  "message": "Move utils to shared repo"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `sourceRepo` | string | Yes | Source repo in `owner/repo` format |
+| `sourcePath` | string | Yes | Current file path |
+| `destinationPath` | string | Yes | New file path |
+| `destinationRepo` | string | No | Destination repo (defaults to same as source) |
+| `branch` | string | No | Branch (defaults to `main`) |
+| `message` | string | No | Commit message (auto-generated if omitted) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "moved": true,
+  "source": { "owner": "owner", "repo": "repo", "branch": "main", "path": "old/path/file.js", "sha": "abc123" },
+  "destination": { "committed": true, "owner": "owner", "repo": "repo", "branch": "main", "path": "new/path/file.js", "commitSha": "def456" }
+}
+```
+
+---
+
 ### POST /readLines
 
 Read a file with line-accurate metadata. Normalizes line endings (CRLF to LF), returns blob SHA for drift detection, and supports extracting specific line ranges.
@@ -1229,6 +1278,7 @@ Returns a detailed report with checks for: allowlist, auth, rate limit, repo acc
 | 500 | DeleteFileFailed | File deletion failed |
 | 500 | UpdateFileFailed | Server-side update failed |
 | 500 | CopyFailed | Cross-repo copy operation failed |
+| 500 | MoveFileFailed | Move/rename operation failed |
 | 500 | BatchReadFailed | Batch read operation failed |
 | 500 | ListFailed | Directory listing failed |
 | 500 | CompareFailed | File comparison failed |
