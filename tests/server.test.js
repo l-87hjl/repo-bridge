@@ -33,6 +33,10 @@ jest.mock('../src/github', () => ({
   discoverSymbols: jest.fn(),
   // New v0.8.0 functions
   moveFile: jest.fn(),
+  // New v0.9.0 functions
+  analyzeImports: jest.fn(),
+  findSymbolReferences: jest.fn(),
+  analyzeDependencies: jest.fn(),
 }));
 
 let app;
@@ -53,7 +57,7 @@ describe('GET /', () => {
     expect(res.status).toBe(200);
     expect(res.body.service).toBe('repo-bridge');
     expect(res.body.status).toBe('running');
-    expect(res.body.version).toBe('0.8.0');
+    expect(res.body.version).toBe('0.9.0');
     expect(res.body.endpoints).toContain('/metrics');
     expect(res.body.endpoints).toContain('/patchReplace');
     expect(res.body.endpoints).toContain('/patchDiff');
@@ -66,10 +70,16 @@ describe('GET /', () => {
     expect(res.body.endpoints).toContain('/symbols');
     expect(res.body.endpoints).toContain('/moveFile');
     expect(res.body.endpoints).toContain('/copy');
+    expect(res.body.endpoints).toContain('/imports');
+    expect(res.body.endpoints).toContain('/references');
+    expect(res.body.endpoints).toContain('/dependencies');
     expect(res.body.capabilities.readLines).toBeDefined();
     expect(res.body.capabilities.moveFile).toBeDefined();
     expect(res.body.capabilities.search).toBeDefined();
     expect(res.body.capabilities.symbols).toBeDefined();
+    expect(res.body.capabilities.imports).toBeDefined();
+    expect(res.body.capabilities.references).toBeDefined();
+    expect(res.body.capabilities.dependencies).toBeDefined();
   });
 });
 
@@ -88,7 +98,7 @@ describe('GET /metrics', () => {
     const res = await request(app).get('/metrics');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.version).toBe('0.8.0');
+    expect(res.body.version).toBe('0.9.0');
     expect(res.body.memory).toBeDefined();
     expect(res.body.memory.rss).toBeGreaterThan(0);
     expect(res.body.memory.heapUsed).toBeGreaterThan(0);
@@ -568,6 +578,139 @@ describe('POST /symbols', () => {
     expect(res.body.totalSymbols).toBe(2);
     expect(res.body.symbols[0].name).toBe('readOneFile');
     expect(res.body.symbols[0].reference.githubUrl).toContain('#L231');
+  });
+});
+
+describe('POST /imports', () => {
+  it('returns 400 if repo is missing', async () => {
+    const res = await request(app)
+      .post('/imports')
+      .send({ paths: ['src/server.js'] });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 if paths is missing', async () => {
+    const res = await request(app)
+      .post('/imports')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns import analysis on valid input', async () => {
+    const github = require('../src/github');
+    github.analyzeImports.mockResolvedValueOnce({
+      ok: true,
+      owner: 'owner', repo: 'repo', branch: 'main',
+      files: [{
+        path: 'src/server.js',
+        blobSha: 'sha123',
+        imports: [
+          { module: './github', symbols: ['readOneFile'], type: 'destructured_require', lineNumber: 3, isRelative: true },
+          { module: 'express', symbols: ['express'], type: 'require', lineNumber: 1, isRelative: false },
+        ],
+        totalImports: 2,
+      }],
+      totalFiles: 1,
+      totalImports: 2,
+    });
+
+    const res = await request(app)
+      .post('/imports')
+      .send({ repo: 'owner/repo', paths: ['src/server.js'] });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.files).toHaveLength(1);
+    expect(res.body.files[0].imports).toHaveLength(2);
+    expect(res.body.totalImports).toBe(2);
+  });
+});
+
+describe('POST /references', () => {
+  it('returns 400 if symbol is missing', async () => {
+    const res = await request(app)
+      .post('/references')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 if repo is missing', async () => {
+    const res = await request(app)
+      .post('/references')
+      .send({ symbol: 'readOneFile' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns symbol references on valid input', async () => {
+    const github = require('../src/github');
+    github.findSymbolReferences.mockResolvedValueOnce({
+      ok: true,
+      symbol: 'readOneFile',
+      owner: 'owner', repo: 'repo', branch: 'main',
+      totalReferences: 5,
+      filesScanned: 10,
+      filesWithReferences: 3,
+      summary: { definitions: 1, imports: 2, usages: 2 },
+      references: [
+        { lineNumber: 231, text: 'async function readOneFile({...}) {', type: 'definition', path: 'src/github.js' },
+        { lineNumber: 10, text: "const { readOneFile } = require('./github');", type: 'import', path: 'src/server.js' },
+        { lineNumber: 55, text: 'const result = await readOneFile({ owner, repo });', type: 'usage', path: 'src/server.js' },
+      ],
+    });
+
+    const res = await request(app)
+      .post('/references')
+      .send({ repo: 'owner/repo', symbol: 'readOneFile' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.symbol).toBe('readOneFile');
+    expect(res.body.totalReferences).toBe(5);
+    expect(res.body.summary.definitions).toBe(1);
+    expect(res.body.summary.imports).toBe(2);
+    expect(res.body.summary.usages).toBe(2);
+    expect(res.body.references).toHaveLength(3);
+  });
+});
+
+describe('POST /dependencies', () => {
+  it('returns 400 if repo is missing', async () => {
+    const res = await request(app)
+      .post('/dependencies')
+      .send({});
+    expect(res.status).toBe(400);
+  });
+
+  it('returns dependency graph on valid input', async () => {
+    const github = require('../src/github');
+    github.analyzeDependencies.mockResolvedValueOnce({
+      ok: true,
+      owner: 'owner', repo: 'repo', branch: 'main',
+      filesAnalyzed: 3,
+      nodes: [
+        { path: 'src/server.js', imports: [{ module: './github', resolvedPath: 'src/github.js' }], exports: [], importCount: 1, exportCount: 0 },
+        { path: 'src/github.js', imports: [{ module: './normalize', resolvedPath: 'src/normalize.js' }], exports: [], importCount: 1, exportCount: 0 },
+        { path: 'src/normalize.js', imports: [], exports: [], importCount: 0, exportCount: 0 },
+      ],
+      edges: [
+        { from: 'src/server.js', to: 'src/github.js', symbols: [] },
+        { from: 'src/github.js', to: 'src/normalize.js', symbols: [] },
+      ],
+      entryPoints: ['src/server.js'],
+      leafNodes: ['src/normalize.js'],
+      circular: [],
+      summary: { totalNodes: 3, totalEdges: 2, entryPoints: 1, leafNodes: 1, circularDependencies: 0 },
+    });
+
+    const res = await request(app)
+      .post('/dependencies')
+      .send({ repo: 'owner/repo' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.nodes).toHaveLength(3);
+    expect(res.body.edges).toHaveLength(2);
+    expect(res.body.entryPoints).toContain('src/server.js');
+    expect(res.body.leafNodes).toContain('src/normalize.js');
+    expect(res.body.circular).toHaveLength(0);
+    expect(res.body.summary.circularDependencies).toBe(0);
   });
 });
 

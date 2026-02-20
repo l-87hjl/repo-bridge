@@ -72,9 +72,12 @@ app.get('/', (req, res) => {
   res.json({
     service: 'repo-bridge',
     status: 'running',
-    version: '0.8.0',
-    endpoints: ['/health', '/metrics', '/apply', '/read', '/readLines', '/blob', '/search', '/symbols', '/list', '/copy', '/moveFile', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
+    version: '0.9.0',
+    endpoints: ['/health', '/metrics', '/apply', '/read', '/readLines', '/blob', '/search', '/symbols', '/imports', '/references', '/dependencies', '/list', '/copy', '/moveFile', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
     capabilities: {
+      imports: 'Parse import/require statements and resolve dependencies via /imports (v0.9.0)',
+      references: 'Find all references to a symbol (definition, import, usage) via /references (v0.9.0)',
+      dependencies: 'Build full dependency graph with circular detection via /dependencies (v0.9.0)',
       readLines: 'Line-accurate file reading with normalization, blob SHA drift detection, and line range extraction via /readLines (v0.7.0)',
       blob: 'Direct blob retrieval by SHA via Git Blobs API (supports files up to 100MB) via /blob (v0.7.0)',
       search: 'Cross-repo content search with line-accurate results via /search (v0.7.0)',
@@ -101,7 +104,7 @@ app.get('/health', async (req, res) => {
   const health = {
     ok: true,
     service: 'repo-bridge',
-    version: '0.8.0',
+    version: '0.9.0',
     time: new Date().toISOString(),
     uptime: process.uptime(),
   };
@@ -140,7 +143,7 @@ app.get('/metrics', async (req, res) => {
   const metrics = {
     success: true,
     service: 'repo-bridge',
-    version: '0.8.0',
+    version: '0.9.0',
     uptime: process.uptime(),
     time: new Date().toISOString(),
     memory: {
@@ -2051,6 +2054,129 @@ app.post('/symbols', requireAuth, async (req, res) => {
   }
 });
 
+// ─── Code Understanding: Imports, References, Dependencies ────────────────────
+
+/**
+ * POST /imports - Analyze import/require statements in files.
+ *
+ * Parses imports for one or more files in a repo. Returns which modules each
+ * file imports, what symbols are pulled in, and whether imports are relative
+ * or external.
+ *
+ * Input: { repo, paths: ["src/server.js", "src/github.js"], branch? }
+ */
+app.post('/imports', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const paths = b.paths;
+    const installationId = b.installationId;
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (owner/repo).');
+    }
+    if (!paths || !Array.isArray(paths) || paths.length === 0) {
+      return badRequest(res, 'Required: paths[] (array of file paths to analyze).');
+    }
+    if (paths.length > 25) {
+      return badRequest(res, 'Maximum 25 files per import analysis request.');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { analyzeImports } = require('./github');
+    const result = await analyzeImports({ owner, repo, branch, paths, installationId });
+    return res.json(result);
+  } catch (e) {
+    return errorResponse(res, 500, 'ImportAnalysisFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /references - Find all references to a symbol across a repo.
+ *
+ * Searches for a symbol name in all source files, classifying each occurrence
+ * as: definition, import, or usage. This answers: "Where is this function
+ * defined, imported, and called?"
+ *
+ * Input: {
+ *   repo: "owner/repo",
+ *   symbol: "readOneFile",
+ *   options?: { paths?, extensions?, maxFiles?, contextLines? }
+ * }
+ */
+app.post('/references', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const symbol = b.symbol;
+    const installationId = b.installationId;
+    const options = b.options || {};
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (owner/repo).');
+    }
+    if (!symbol || typeof symbol !== 'string') {
+      return badRequest(res, 'Required: symbol (name of the function/class/variable to find).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { findSymbolReferences } = require('./github');
+    const result = await findSymbolReferences({ owner, repo, branch, symbol, installationId, options });
+    return res.json(result);
+  } catch (e) {
+    return errorResponse(res, 500, 'ReferencesFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /dependencies - Build a dependency graph for a repo.
+ *
+ * Reads all source files, parses their imports, and builds a graph showing:
+ * - Which files import which other files
+ * - Entry points (imported by nothing)
+ * - Leaf nodes (import nothing)
+ * - Circular dependencies
+ * - What symbols each file exports
+ *
+ * This is the key endpoint for understanding how a codebase fits together.
+ *
+ * Input: {
+ *   repo: "owner/repo",
+ *   options?: { paths?, extensions?, maxFiles? }
+ * }
+ */
+app.post('/dependencies', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+    const { owner, repo } = parseOwnerRepo(b);
+    const branch = b.branch || DEFAULT_BRANCH;
+    const installationId = b.installationId;
+    const options = b.options || {};
+
+    if (!owner || !repo) {
+      return badRequest(res, 'Required: repo (owner/repo).');
+    }
+
+    if (!isRepoAllowed(owner, repo)) {
+      return forbidden(res, `Repository ${owner}/${repo} is not in the allowlist`);
+    }
+
+    const { analyzeDependencies } = require('./github');
+    const result = await analyzeDependencies({ owner, repo, branch, installationId, options });
+    return res.json(result);
+  } catch (e) {
+    return errorResponse(res, 500, 'DependencyAnalysisFailed', e, { requestId: req.requestId });
+  }
+});
+
 // ─── Catch-all and error handler ──────────────────────────────────────────────
 
 app.use((req, res) => res.status(404).json({ ok: false, error: 'NotFound' }));
@@ -2129,7 +2255,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 server = app.listen(PORT, () => {
-  log.info('repo-bridge started', { port: PORT, version: '0.8.0' });
+  log.info('repo-bridge started', { port: PORT, version: '0.9.0' });
 
   // Start self-diagnosis loop if configured
   if (DIAG_INTERVAL_MS > 0) {

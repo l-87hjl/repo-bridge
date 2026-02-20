@@ -6,7 +6,7 @@ This document provides instructions for AI agents (ChatGPT, Claude, etc.) that u
 
 repo-bridge is a multi-repo microservice that lets you read, write, list, copy, move, search, and patch files across **multiple GitHub repositories**. Every API call accepts an `owner/repo` parameter, so you can operate across any accessible repo on any call.
 
-Version: **0.8.0** — 30 endpoints covering file CRUD, line-accurate reading, cross-repo search, symbol discovery, patching, branch management, and PR creation.
+Version: **0.9.0** — 33 endpoints covering file CRUD, line-accurate reading, cross-repo search, symbol discovery, import analysis, reference finding, dependency graphs, patching, branch management, and PR creation.
 
 ## Quick Reference — All Endpoints
 
@@ -24,6 +24,9 @@ Version: **0.8.0** — 30 endpoints covering file CRUD, line-accurate reading, c
 | `POST /symbols` | Discover functions, classes, interfaces across repos |
 | `POST /compare` | Compare a file between repos or branches |
 | `POST /compareStructure` | Compare directory structures between repos |
+| `POST /imports` | Parse import/require statements, resolve dependencies |
+| `POST /references` | Find all references to a symbol (definition, import, usage) |
+| `POST /dependencies` | Build full dependency graph with circular detection |
 
 ### Writing & Modifying
 
@@ -272,6 +275,68 @@ Get every file in a repo with SHAs and sizes in one call:
 POST /repoTree
 { "repo": "owner/repo" }
 ```
+
+---
+
+## Code Understanding — How Files Relate
+
+These endpoints let you understand how a codebase fits together, not just read individual files.
+
+### Analyze Imports (what does a file depend on?)
+
+```json
+POST /imports
+{
+  "repo": "owner/repo",
+  "paths": ["src/server.js", "src/github.js"]
+}
+```
+
+Returns for each file: what modules it imports, what symbols it pulls in, whether imports are relative or external, and line numbers.
+
+### Find All References (where is a symbol used?)
+
+Given a symbol name, find every file and line where it appears — classified as definition, import, or usage.
+
+```json
+POST /references
+{
+  "repo": "owner/repo",
+  "symbol": "readOneFile"
+}
+```
+
+Returns:
+- `summary` — counts: `{ definitions: 1, imports: 3, usages: 7 }`
+- `references[]` — each with lineNumber, text, type (definition/import/usage), path, and GitHub URL
+
+This answers: "If I change this function's signature, what else needs updating?"
+
+### Build Dependency Graph (how does the whole repo connect?)
+
+```json
+POST /dependencies
+{
+  "repo": "owner/repo"
+}
+```
+
+Returns:
+- `nodes[]` — every file with its imports and exports
+- `edges[]` — which file imports which, with imported symbols
+- `entryPoints` — files that nothing imports (application roots)
+- `leafNodes` — files that import nothing (pure utilities)
+- `circular` — detected circular dependency chains
+
+This is the key endpoint for understanding architecture before making changes.
+
+### Recommended Workflow: Understand Before Modifying
+
+1. **`/dependencies`** — get the full dependency graph to understand structure
+2. **`/references`** — find all usages of the symbol you want to change
+3. **`/imports`** — check what a specific file depends on
+4. **`/readLines`** — read the exact code with line numbers
+5. **`/patchReplace`** — make surgical edits with confidence
 
 ---
 

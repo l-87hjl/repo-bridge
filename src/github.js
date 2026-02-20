@@ -3,7 +3,7 @@
 const { Octokit } = require('@octokit/rest');
 const { createAppAuth } = require('@octokit/auth-app');
 const log = require('./logger');
-const { normalizeContent, searchContent, findSymbols, buildLineReference } = require('./normalize');
+const { normalizeContent, searchContent, findSymbols, buildLineReference, parseImports, findReferences, buildDependencyGraph } = require('./normalize');
 
 // --- Configuration ---
 const REQUEST_TIMEOUT_MS = Number(process.env.REQUEST_TIMEOUT_MS) || 30000;
@@ -1344,6 +1344,261 @@ async function discoverSymbols({ repos, installationId, options = {} }) {
   };
 }
 
+/**
+ * Analyze imports for one or more files in a repo.
+ *
+ * For each file, parses import/require statements and resolves relative paths
+ * against the repo's file tree.
+ *
+ * @param {object} params
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @param {string} params.branch
+ * @param {string[]} params.paths - File paths to analyze
+ * @param {string} [params.installationId]
+ * @returns {Promise<object>} Import analysis results
+ */
+async function analyzeImports({ owner, repo, branch, paths, installationId }) {
+  const context = { operation: 'analyzeImports', owner, repo, branch, pathCount: paths.length };
+  log.info('Analyzing imports', context);
+  const startMs = Date.now();
+
+  const results = [];
+
+  for (const filePath of paths) {
+    try {
+      const fileData = await readOneFile({ owner, repo, branch, path: filePath, installationId });
+      const content = normalizeContent(fileData.content);
+      const imports = parseImports(content, filePath);
+
+      results.push({
+        path: filePath,
+        blobSha: fileData.sha,
+        imports: imports.map(imp => ({
+          module: imp.module,
+          symbols: imp.symbols,
+          type: imp.type,
+          lineNumber: imp.lineNumber,
+          text: imp.text,
+          isRelative: imp.isRelative,
+          reference: buildLineReference({
+            owner, repo, path: filePath,
+            blobSha: fileData.sha,
+            startLine: imp.lineNumber,
+          }),
+        })),
+        totalImports: imports.length,
+      });
+    } catch (err) {
+      log.debug('Could not analyze imports for file', { owner, repo, path: filePath, error: err.message });
+      results.push({
+        path: filePath,
+        error: err.message,
+        imports: [],
+        totalImports: 0,
+      });
+    }
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.info('Import analysis completed', { ...context, durationMs, filesAnalyzed: results.length });
+
+  return {
+    ok: true,
+    owner, repo, branch,
+    files: results,
+    totalFiles: results.length,
+    totalImports: results.reduce((sum, r) => sum + r.totalImports, 0),
+  };
+}
+
+/**
+ * Find all references to a symbol across files in a repo.
+ *
+ * Searches for a symbol name in all specified files (or all files matching
+ * given extensions), classifying each occurrence as definition, import, or usage.
+ *
+ * @param {object} params
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @param {string} params.branch
+ * @param {string} params.symbol - Symbol name to find
+ * @param {string} [params.installationId]
+ * @param {object} [params.options]
+ * @param {string[]} [params.options.paths] - Specific paths to search
+ * @param {string[]} [params.options.extensions] - File extensions to scan
+ * @param {number} [params.options.maxFiles=50] - Max files to scan
+ * @param {number} [params.options.contextLines=1] - Lines of context
+ * @returns {Promise<object>} Reference results
+ */
+async function findSymbolReferences({ owner, repo, branch, symbol, installationId, options = {} }) {
+  const context = { operation: 'findSymbolReferences', owner, repo, branch, symbol };
+  log.info('Finding symbol references', context);
+  const startMs = Date.now();
+
+  const {
+    paths: targetPaths,
+    extensions = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rb', '.java', '.rs'],
+    maxFiles = 50,
+    contextLines = 1,
+  } = options;
+
+  // Get file tree
+  const tree = await getRepoTree({ owner, repo, branch, installationId });
+
+  // Filter to scannable files
+  let filesToScan = tree.entries.filter(entry => {
+    if (entry.type !== 'file') return false;
+    const ext = entry.path.includes('.') ? '.' + entry.path.split('.').pop().toLowerCase() : '';
+    if (!extensions.some(e => e.toLowerCase() === ext)) return false;
+    if (targetPaths && targetPaths.length > 0) {
+      return targetPaths.some(p => entry.path.startsWith(p));
+    }
+    return true;
+  }).slice(0, maxFiles);
+
+  const allReferences = [];
+  let filesWithReferences = 0;
+
+  for (const file of filesToScan) {
+    try {
+      const fileData = await readOneFile({ owner, repo, branch, path: file.path, installationId });
+      const content = normalizeContent(fileData.content);
+
+      // Quick check: does this file even contain the symbol name?
+      if (!content.includes(symbol)) continue;
+
+      const refs = findReferences(content, symbol, file.path, { contextLines });
+
+      if (refs.length > 0) {
+        filesWithReferences++;
+        for (const ref of refs) {
+          allReferences.push({
+            ...ref,
+            repo: `${owner}/${repo}`,
+            path: file.path,
+            branch,
+            blobSha: fileData.sha,
+            reference: buildLineReference({
+              owner, repo, path: file.path,
+              blobSha: fileData.sha,
+              startLine: ref.lineNumber,
+            }),
+          });
+        }
+      }
+    } catch (err) {
+      log.debug('Could not scan file for references', { path: file.path, error: err.message });
+    }
+  }
+
+  const durationMs = Date.now() - startMs;
+  log.info('Symbol reference search completed', {
+    ...context, durationMs, filesScanned: filesToScan.length,
+    filesWithReferences, totalReferences: allReferences.length,
+  });
+
+  // Group by type for summary
+  const definitions = allReferences.filter(r => r.type === 'definition');
+  const imports = allReferences.filter(r => r.type === 'import');
+  const usages = allReferences.filter(r => r.type === 'usage');
+
+  return {
+    ok: true,
+    symbol,
+    owner, repo, branch,
+    totalReferences: allReferences.length,
+    filesScanned: filesToScan.length,
+    filesWithReferences,
+    summary: {
+      definitions: definitions.length,
+      imports: imports.length,
+      usages: usages.length,
+    },
+    references: allReferences,
+  };
+}
+
+/**
+ * Build a dependency graph for a repo.
+ *
+ * Reads all files matching the given extensions, parses their imports,
+ * and builds a graph showing how files relate to each other.
+ *
+ * @param {object} params
+ * @param {string} params.owner
+ * @param {string} params.repo
+ * @param {string} params.branch
+ * @param {string} [params.installationId]
+ * @param {object} [params.options]
+ * @param {string[]} [params.options.paths] - Specific paths to include
+ * @param {string[]} [params.options.extensions] - File extensions to scan
+ * @param {number} [params.options.maxFiles=100] - Max files to scan
+ * @returns {Promise<object>} Dependency graph
+ */
+async function analyzeDependencies({ owner, repo, branch, installationId, options = {} }) {
+  const context = { operation: 'analyzeDependencies', owner, repo, branch };
+  log.info('Analyzing dependencies', context);
+  const startMs = Date.now();
+
+  const {
+    paths: targetPaths,
+    extensions = ['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs', '.py', '.go', '.rb', '.java', '.rs'],
+    maxFiles = 100,
+  } = options;
+
+  // Get file tree
+  const tree = await getRepoTree({ owner, repo, branch, installationId });
+
+  // Filter to scannable files
+  let filesToScan = tree.entries.filter(entry => {
+    if (entry.type !== 'file') return false;
+    const ext = entry.path.includes('.') ? '.' + entry.path.split('.').pop().toLowerCase() : '';
+    if (!extensions.some(e => e.toLowerCase() === ext)) return false;
+    if (targetPaths && targetPaths.length > 0) {
+      return targetPaths.some(p => entry.path.startsWith(p));
+    }
+    return true;
+  }).slice(0, maxFiles);
+
+  // Read all files
+  const fileContents = [];
+  for (const file of filesToScan) {
+    try {
+      const fileData = await readOneFile({ owner, repo, branch, path: file.path, installationId });
+      fileContents.push({
+        path: file.path,
+        content: normalizeContent(fileData.content),
+      });
+    } catch (err) {
+      log.debug('Could not read file for dependency analysis', { path: file.path, error: err.message });
+    }
+  }
+
+  // Build the graph
+  const graph = buildDependencyGraph(fileContents);
+
+  const durationMs = Date.now() - startMs;
+  log.info('Dependency analysis completed', {
+    ...context, durationMs, filesAnalyzed: fileContents.length,
+    edges: graph.edges.length, circular: graph.circular.length,
+  });
+
+  return {
+    ok: true,
+    owner, repo, branch,
+    filesAnalyzed: fileContents.length,
+    ...graph,
+    summary: {
+      totalNodes: graph.nodes.length,
+      totalEdges: graph.edges.length,
+      entryPoints: graph.entryPoints.length,
+      leafNodes: graph.leafNodes.length,
+      circularDependencies: graph.circular.length,
+    },
+  };
+}
+
 module.exports = {
   getInstallationOctokit,
   applyOneFile,
@@ -1362,12 +1617,16 @@ module.exports = {
   createPullRequest,
   moveFile,
   invalidateTokenCache,
-  // New: line-accurate reading and blob retrieval
+  // Line-accurate reading and blob retrieval
   readFileWithLineMap,
   getBlob,
-  // New: cross-repo search and symbol discovery
+  // Cross-repo search and symbol discovery
   searchRepoContent,
   discoverSymbols,
+  // Code understanding: imports, references, dependencies
+  analyzeImports,
+  findSymbolReferences,
+  analyzeDependencies,
   // Exported for testing
   isTransientError,
   withRetry,

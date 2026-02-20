@@ -678,6 +678,86 @@
           "200": { "description": "Discovered symbols with line references" }
         }
       }
+    },
+
+    "/imports": {
+      "post": {
+        "operationId": "analyzeImports",
+        "summary": "Parse import/require statements in files. Returns which modules each file imports, what symbols are pulled in, and whether imports are relative or external.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "paths"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "paths": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Import analysis with module paths and imported symbols" }
+        }
+      }
+    },
+
+    "/references": {
+      "post": {
+        "operationId": "findReferences",
+        "summary": "Find all references to a symbol (function, class, variable) across a repo. Classifies each occurrence as definition, import, or usage.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "symbol"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "symbol": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Symbol references classified as definition, import, or usage" }
+        }
+      }
+    },
+
+    "/dependencies": {
+      "post": {
+        "operationId": "analyzeDependencies",
+        "summary": "Build a full dependency graph for a repo. Shows which files import which, entry points, leaf nodes, and circular dependencies. Key endpoint for understanding how a codebase fits together.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Dependency graph with nodes, edges, entry points, leaf nodes, and circular dependency detection" }
+        }
+      }
     }
   }
 }
