@@ -103,3 +103,23 @@ Extracted `applySearchReplace()` as a pure function for testability.
 - Updated `README.md` with `/moveFile` in features and endpoints table
 
 **Test coverage:** 79 tests (42 normalize + 37 server integration)
+
+## [2026-02-20] v0.9.0 — Code Understanding: Imports, References, Dependencies
+
+**Files Changed:** src/normalize.js, src/github.js, src/server.js, tests/normalize.test.js, tests/server.test.js, package.json, docs/chatgpt-tool-schema.json, docs/README_AI.md, docs/API.md, README.md
+**Summary:**
+
+**New endpoints for deep repository understanding:**
+- `/imports` — Parse import/require statements in files. Returns modules, imported symbols, relative vs external, line numbers. Supports JS/TS (ESM + CJS), Python, Go, Ruby, Java, Rust
+- `/references` — Find all references to a symbol across a repo, classified as definition, import, or usage. Answers "where is this function defined, imported, and called?"
+- `/dependencies` — Build full dependency graph for a repo. Shows which files import which, entry points (imported by nothing), leaf nodes (import nothing), and circular dependency detection
+
+**New normalize.js functions:**
+- `parseImports()` — Multi-language import/require parser with symbol extraction
+- `findReferences()` — Symbol reference finder with type classification (definition/import/usage)
+- `resolveImportPath()` — Relative import path resolver
+- `buildDependencyGraph()` — Graph builder with circular dependency detection via DFS
+
+**Design principle:** These endpoints let an agent understand how code interconnects before making changes — answering "if I change X, what else is affected?" instead of modifying files in isolation.
+
+**Test coverage:** 117 tests (71 normalize + 46 server integration)

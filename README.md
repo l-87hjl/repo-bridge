@@ -28,6 +28,9 @@ Repo-bridge is designed as a governed interface between AI agents and GitHub, em
 ### Cross-Repo Intelligence
 - **Content search** — Search across repos with line-accurate results (`/search`)
 - **Symbol discovery** — Find functions, classes, interfaces across repos (`/symbols`)
+- **Import analysis** — Parse import/require statements, resolve dependencies (`/imports`)
+- **Reference finding** — Find all usages of a symbol: definition, import, usage (`/references`)
+- **Dependency graph** — Full dependency graph with circular detection (`/dependencies`)
 - **File comparison** — Compare files between repos or branches (`/compare`)
 - **Structure comparison** — Compare directory structures (`/compareStructure`)
 
@@ -51,7 +54,7 @@ Repo-bridge is designed as a governed interface between AI agents and GitHub, em
 - Repository and path allowlists for access control
 - GPT Actions compatible OpenAPI 3.0.1 schemas (flat, deterministic, no conditional fields)
 - Security headers via Helmet
-- 75 tests (Jest + Supertest)
+- 117 tests (Jest + Supertest)
 - Designed for deployment on Render
 
 ## Prerequisites
@@ -137,6 +140,9 @@ The server will start on `http://localhost:3000`.
 | POST | `/moveFile` | Move or rename a file in one call | v0.8 |
 | POST | `/search` | Cross-repo content search with line references | v0.7 |
 | POST | `/symbols` | Cross-repo symbol discovery | v0.7 |
+| POST | `/imports` | Parse imports, resolve dependencies | v0.9 |
+| POST | `/references` | Find all references to a symbol | v0.9 |
+| POST | `/dependencies` | Build full dependency graph | v0.9 |
 | POST | `/compare` | Compare a file between repos/branches | v0.4 |
 | POST | `/compareStructure` | Compare directory structures | v0.4 |
 | POST | `/listBranches` | List all branches for a repo | v0.7 |
@@ -250,7 +256,7 @@ repo-bridge/
 │   └── agent-workspace/       # Workspace repo templates (active state)
 ├── .env.example               # Example environment configuration
 ├── .gitignore
-├── package.json               # v0.7.0
+├── package.json               # v0.9.0
 └── README.md
 ```
 
@@ -282,9 +288,9 @@ For AI agents (ChatGPT, Claude, etc.) using repo-bridge:
 npm test
 ```
 
-Runs 75 tests across 2 test suites:
-- **tests/server.test.js** — 33 integration tests covering all endpoints (mocked GitHub API)
-- **tests/normalize.test.js** — 42 unit tests for content normalization, line mapping, symbol discovery
+Runs 117 tests across 2 test suites:
+- **tests/server.test.js** — 46 integration tests covering all endpoints (mocked GitHub API)
+- **tests/normalize.test.js** — 71 unit tests for content normalization, line mapping, symbol discovery, import parsing, reference finding, dependency graphs
 
 ## Deployment on Render
 

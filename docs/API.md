@@ -1238,6 +1238,201 @@ Create a pull request to propose changes for review.
 
 ---
 
+### POST /imports
+
+Parse import/require statements in specified files. Returns which modules each file imports, what symbols are pulled in, and whether imports are relative or external.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "paths": ["src/server.js", "src/github.js"],
+  "branch": "main"
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `paths` | string[] | Yes | File paths to analyze (max 25) |
+| `branch` | string | No | Branch (defaults to `main`) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "owner", "repo": "repo", "branch": "main",
+  "files": [
+    {
+      "path": "src/server.js",
+      "blobSha": "abc123",
+      "imports": [
+        {
+          "module": "express",
+          "symbols": ["express"],
+          "type": "require",
+          "lineNumber": 1,
+          "isRelative": false,
+          "reference": { "ref": "owner/repo:src/server.js:1", "githubUrl": "..." }
+        },
+        {
+          "module": "./github",
+          "symbols": ["readOneFile", "applyOneFile"],
+          "type": "destructured_require",
+          "lineNumber": 3,
+          "isRelative": true,
+          "reference": { "ref": "owner/repo:src/server.js:3", "githubUrl": "..." }
+        }
+      ],
+      "totalImports": 2
+    }
+  ],
+  "totalFiles": 1,
+  "totalImports": 2
+}
+```
+
+---
+
+### POST /references
+
+Find all references to a symbol (function, class, variable) across a repo. Classifies each occurrence as definition, import, or usage.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "symbol": "readOneFile",
+  "branch": "main",
+  "options": {
+    "extensions": [".js", ".ts"],
+    "maxFiles": 50,
+    "contextLines": 1
+  }
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `symbol` | string | Yes | Symbol name to search for |
+| `branch` | string | No | Branch (defaults to `main`) |
+| `options.paths` | string[] | No | Specific paths to search |
+| `options.extensions` | string[] | No | File extensions to scan (defaults to common source files) |
+| `options.maxFiles` | number | No | Max files to scan (defaults to 50) |
+| `options.contextLines` | number | No | Lines of context around each reference (defaults to 1) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "symbol": "readOneFile",
+  "owner": "owner", "repo": "repo", "branch": "main",
+  "totalReferences": 5,
+  "filesScanned": 10,
+  "filesWithReferences": 3,
+  "summary": {
+    "definitions": 1,
+    "imports": 2,
+    "usages": 2
+  },
+  "references": [
+    {
+      "lineNumber": 231,
+      "text": "async function readOneFile({ owner, repo, branch, path }) {",
+      "type": "definition",
+      "path": "src/github.js",
+      "blobSha": "sha456",
+      "context": { "before": [""], "after": ["  const context = ..."] },
+      "reference": { "ref": "owner/repo:src/github.js:231", "githubUrl": "..." }
+    },
+    {
+      "lineNumber": 10,
+      "text": "const { readOneFile } = require('./github');",
+      "type": "import",
+      "path": "src/server.js",
+      "reference": { "ref": "owner/repo:src/server.js:10", "githubUrl": "..." }
+    },
+    {
+      "lineNumber": 55,
+      "text": "const result = await readOneFile({ owner, repo });",
+      "type": "usage",
+      "path": "src/server.js",
+      "reference": { "ref": "owner/repo:src/server.js:55", "githubUrl": "..." }
+    }
+  ]
+}
+```
+
+---
+
+### POST /dependencies
+
+Build a full dependency graph for a repo. Shows which files import which, entry points, leaf nodes, and circular dependencies.
+
+**Request Body**
+
+```json
+{
+  "repo": "owner/repo",
+  "branch": "main",
+  "options": {
+    "extensions": [".js", ".ts"],
+    "maxFiles": 100
+  }
+}
+```
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `repo` | string | Yes | Repository in `owner/repo` format |
+| `branch` | string | No | Branch (defaults to `main`) |
+| `options.paths` | string[] | No | Limit to specific paths |
+| `options.extensions` | string[] | No | File extensions to scan |
+| `options.maxFiles` | number | No | Max files to scan (defaults to 100) |
+
+**Response (200)**
+
+```json
+{
+  "ok": true,
+  "owner": "owner", "repo": "repo", "branch": "main",
+  "filesAnalyzed": 3,
+  "nodes": [
+    {
+      "path": "src/server.js",
+      "imports": [
+        { "module": "./github", "resolvedPath": "src/github.js", "symbols": ["readOneFile"], "isRelative": true }
+      ],
+      "exports": [
+        { "name": "app", "type": "const", "lineNumber": 5 }
+      ],
+      "importCount": 2,
+      "exportCount": 1
+    }
+  ],
+  "edges": [
+    { "from": "src/server.js", "to": "src/github.js", "symbols": ["readOneFile"], "importType": "destructured_require", "lineNumber": 3 }
+  ],
+  "entryPoints": ["src/server.js"],
+  "leafNodes": ["src/normalize.js"],
+  "circular": [],
+  "summary": {
+    "totalNodes": 3,
+    "totalEdges": 2,
+    "entryPoints": 1,
+    "leafNodes": 1,
+    "circularDependencies": 0
+  }
+}
+```
+
+---
+
 ### POST /diagnose
 
 Test connectivity and permissions for a specific repository. Returns detailed diagnostic information about authentication, rate limits, repo access, and file access.
@@ -1279,6 +1474,9 @@ Returns a detailed report with checks for: allowlist, auth, rate limit, repo acc
 | 500 | UpdateFileFailed | Server-side update failed |
 | 500 | CopyFailed | Cross-repo copy operation failed |
 | 500 | MoveFileFailed | Move/rename operation failed |
+| 500 | ImportAnalysisFailed | Import parsing failed |
+| 500 | ReferencesFailed | Symbol reference search failed |
+| 500 | DependencyAnalysisFailed | Dependency graph build failed |
 | 500 | BatchReadFailed | Batch read operation failed |
 | 500 | ListFailed | Directory listing failed |
 | 500 | CompareFailed | File comparison failed |
