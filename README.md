@@ -17,6 +17,7 @@ Repo-bridge is designed as a governed interface between AI agents and GitHub, em
 - **Recursive tree** — full file tree with SHAs in one API call via Git Trees API (`/repoTree`)
 - **Batch read** — Read up to 25 files from any combination of repos in one call (`/batchRead`)
 - **Cross-repo copy** — Copy files between repositories in a single call (`/copy`)
+- **Move / rename** — Move or rename files in one call, same-repo or cross-repo (`/moveFile`)
 - **Multi-file writes** — Write multiple files per commit with `changes[]` array
 
 ### Patching
@@ -133,6 +134,7 @@ The server will start on `http://localhost:3000`.
 | POST | `/patchDiff` | Unified diff patch (GPT Actions safe) | v0.5 |
 | POST | `/patch` | Combined patch (legacy, both modes) | v0.5 |
 | POST | `/copy` | Copy a file between repositories | v0.1 |
+| POST | `/moveFile` | Move or rename a file in one call | v0.8 |
 | POST | `/search` | Cross-repo content search with line references | v0.7 |
 | POST | `/symbols` | Cross-repo symbol discovery | v0.7 |
 | POST | `/compare` | Compare a file between repos/branches | v0.4 |

@@ -946,6 +946,58 @@ async function createPullRequest({ owner, repo, title, body, head, base, install
 }
 
 /**
+ * Move (or rename) a file. Works within the same repo or across repos.
+ *
+ * Performs: read source → write to destination → delete source.
+ * A rename is simply a move within the same repo.
+ *
+ * @param {object} params
+ * @param {string} params.srcOwner
+ * @param {string} params.srcRepo
+ * @param {string} params.srcBranch
+ * @param {string} params.srcPath
+ * @param {string} params.destOwner
+ * @param {string} params.destRepo
+ * @param {string} params.destBranch
+ * @param {string} params.destPath
+ * @param {string} params.message - Commit message
+ * @param {string} [params.installationId]
+ * @returns {Promise<object>} Move result
+ */
+async function moveFile({ srcOwner, srcRepo, srcBranch, srcPath, destOwner, destRepo, destBranch, destPath, message, installationId }) {
+  const context = { operation: 'moveFile', srcOwner, srcRepo, srcPath, destOwner, destRepo, destPath };
+  log.info('Moving file', context);
+  const startMs = Date.now();
+
+  // 1. Read source file
+  const readResult = await readOneFile({
+    owner: srcOwner, repo: srcRepo, branch: srcBranch, path: srcPath, installationId,
+  });
+
+  // 2. Write to destination
+  const writeResult = await applyOneFile({
+    owner: destOwner, repo: destRepo, branch: destBranch,
+    path: destPath, content: readResult.content, message, installationId,
+  });
+
+  // 3. Delete source (only after write succeeds)
+  await deleteOneFile({
+    owner: srcOwner, repo: srcRepo, branch: srcBranch,
+    path: srcPath, message: `Delete ${srcPath} (moved to ${destPath})`, installationId,
+  });
+
+  const durationMs = Date.now() - startMs;
+  log.info('File moved', { ...context, durationMs });
+
+  return {
+    ok: true,
+    moved: true,
+    source: { owner: srcOwner, repo: srcRepo, branch: srcBranch, path: srcPath, sha: readResult.sha },
+    destination: { ...writeResult },
+  };
+}
+
+/**
  * Read a file with line-accurate metadata using raw blob retrieval.
  *
  * This is the core function that solves the line-mismatch problem:
@@ -1308,6 +1360,7 @@ module.exports = {
   listBranches,
   createBranch,
   createPullRequest,
+  moveFile,
   invalidateTokenCache,
   // New: line-accurate reading and blob retrieval
   readFileWithLineMap,

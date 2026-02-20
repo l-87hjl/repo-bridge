@@ -483,6 +483,95 @@
       }
     },
 
+    "/copy": {
+      "post": {
+        "operationId": "copyFile",
+        "summary": "Copy a file between repositories (or within the same repo). Reads source, writes to destination. Exact byte-for-byte copy.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sourceRepo", "sourcePath", "destinationRepo"],
+                "properties": {
+                  "sourceRepo": { "type": "string" },
+                  "sourcePath": { "type": "string" },
+                  "destinationRepo": { "type": "string" },
+                  "destinationPath": { "type": "string" },
+                  "message": { "type": "string" },
+                  "sourceBranch": { "type": "string" },
+                  "destinationBranch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File copied successfully" },
+          "404": { "description": "Source file not found" }
+        }
+      }
+    },
+
+    "/moveFile": {
+      "post": {
+        "operationId": "moveFile",
+        "summary": "Move or rename a file in one call. Same-repo move is a rename. Also works across repos. Reads source, writes to destination, deletes source.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["sourceRepo", "sourcePath", "destinationPath"],
+                "properties": {
+                  "sourceRepo": { "type": "string" },
+                  "sourcePath": { "type": "string" },
+                  "destinationPath": { "type": "string" },
+                  "destinationRepo": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "File moved successfully" },
+          "404": { "description": "Source file not found" }
+        }
+      }
+    },
+
+    "/dryRun": {
+      "post": {
+        "operationId": "dryRun",
+        "summary": "Preview what a write would do without making any changes. Makes zero GitHub API calls. Safe to call anytime.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["repo", "path", "content", "message"],
+                "properties": {
+                  "repo": { "type": "string" },
+                  "path": { "type": "string" },
+                  "content": { "type": "string" },
+                  "message": { "type": "string" },
+                  "branch": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": { "description": "Preview of what would be applied" }
+        }
+      }
+    },
+
     "/readLines": {
       "post": {
         "operationId": "readLines",
