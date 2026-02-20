@@ -72,13 +72,14 @@ app.get('/', (req, res) => {
   res.json({
     service: 'repo-bridge',
     status: 'running',
-    version: '0.7.0',
-    endpoints: ['/health', '/metrics', '/apply', '/read', '/readLines', '/blob', '/search', '/symbols', '/list', '/copy', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
+    version: '0.8.0',
+    endpoints: ['/health', '/metrics', '/apply', '/read', '/readLines', '/blob', '/search', '/symbols', '/list', '/copy', '/moveFile', '/patch', '/patchReplace', '/patchDiff', '/repoTree', '/deleteFile', '/updateFile', '/batchRead', '/dryRun', '/batch/read', '/github/dryrun', '/compare', '/compareStructure', '/listBranches', '/createBranch', '/createPR', '/webhook', '/diagnose'],
     capabilities: {
       readLines: 'Line-accurate file reading with normalization, blob SHA drift detection, and line range extraction via /readLines (v0.7.0)',
       blob: 'Direct blob retrieval by SHA via Git Blobs API (supports files up to 100MB) via /blob (v0.7.0)',
       search: 'Cross-repo content search with line-accurate results via /search (v0.7.0)',
       symbols: 'Cross-repo symbol discovery (functions, classes, interfaces) via /symbols (v0.7.0)',
+      moveFile: 'Move or rename a file in one call — same-repo rename or cross-repo move via /moveFile (v0.8.0)',
       listBranches: 'List all branches for a repo via /listBranches (v0.7.0)',
       createBranch: 'Create feature branches via /createBranch (v0.7.0)',
       createPR: 'Propose changes via pull requests with /createPR (v0.7.0)',
@@ -100,7 +101,7 @@ app.get('/health', async (req, res) => {
   const health = {
     ok: true,
     service: 'repo-bridge',
-    version: '0.7.0',
+    version: '0.8.0',
     time: new Date().toISOString(),
     uptime: process.uptime(),
   };
@@ -139,7 +140,7 @@ app.get('/metrics', async (req, res) => {
   const metrics = {
     success: true,
     service: 'repo-bridge',
-    version: '0.7.0',
+    version: '0.8.0',
     uptime: process.uptime(),
     time: new Date().toISOString(),
     memory: {
@@ -1037,6 +1038,82 @@ app.post('/copy', requireAuth, async (req, res) => {
       return res.status(404).json({ ok: false, error: 'NotFound', message: 'Source file not found', requestId: req.requestId });
     }
     return errorResponse(res, 500, 'CopyFailed', e, { requestId: req.requestId });
+  }
+});
+
+/**
+ * POST /moveFile — Move or rename a file in one call.
+ *
+ * Within the same repo, this is a rename. Across repos, this is a cross-repo move.
+ * Performs: read source → write to destination → delete source.
+ *
+ * Input: { sourceRepo, sourcePath, destinationRepo?, destinationPath, message? }
+ */
+app.post('/moveFile', requireAuth, async (req, res) => {
+  try {
+    const b = req.body || {};
+
+    // Parse source
+    let srcOwner, srcRepo;
+    const sourceRepoField = b.sourceRepo || b.source || b.from || b.repo;
+    if (typeof sourceRepoField === 'string' && sourceRepoField.includes('/')) {
+      [srcOwner, srcRepo] = sourceRepoField.split('/');
+    }
+    const srcBranch = b.sourceBranch || b.branch || DEFAULT_BRANCH;
+    const srcPath = b.sourcePath || b.path;
+
+    // Parse destination — defaults to same repo if not specified
+    let destOwner, destRepo;
+    const destRepoField = b.destinationRepo || b.destination || b.to;
+    if (destRepoField && typeof destRepoField === 'string' && destRepoField.includes('/')) {
+      [destOwner, destRepo] = destRepoField.split('/');
+    } else {
+      destOwner = srcOwner;
+      destRepo = srcRepo;
+    }
+    const destBranch = b.destinationBranch || srcBranch;
+    const destPath = b.destinationPath || b.newPath;
+
+    if (!srcOwner || !srcRepo || !srcPath) {
+      return badRequest(res, 'Required: sourceRepo (owner/repo), sourcePath. For rename within same repo, also use repo + path + newPath.');
+    }
+    if (!destPath) {
+      return badRequest(res, 'Required: destinationPath (or newPath) — the new file path.');
+    }
+
+    if (!isRepoAllowed(srcOwner, srcRepo)) {
+      return forbidden(res, `Source repository ${srcOwner}/${srcRepo} is not in the allowlist`);
+    }
+    if (!isRepoAllowed(destOwner, destRepo)) {
+      return forbidden(res, `Destination repository ${destOwner}/${destRepo} is not in the allowlist`);
+    }
+    if (!isPathAllowed(destPath)) {
+      return forbidden(res, `Destination path ${destPath} is not in the allowlist`);
+    }
+    if (isRepoReadOnly(srcOwner, srcRepo)) {
+      return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Source repository ${srcOwner}/${srcRepo} is read-only (cannot delete source)` });
+    }
+    if (isRepoReadOnly(destOwner, destRepo)) {
+      return res.status(403).json({ ok: false, error: 'RepoReadOnly', message: `Destination repository ${destOwner}/${destRepo} is read-only` });
+    }
+
+    const message = b.message || `Move ${srcPath} to ${destPath}`;
+    const installationId = b.installationId;
+
+    const { moveFile } = require('./github');
+    const result = await moveFile({
+      srcOwner, srcRepo, srcBranch, srcPath,
+      destOwner, destRepo, destBranch, destPath,
+      message, installationId,
+    });
+
+    return res.json(result);
+  } catch (e) {
+    const status = e?.status;
+    if (status === 404) {
+      return res.status(404).json({ ok: false, error: 'NotFound', message: 'Source file not found.', requestId: req.requestId });
+    }
+    return errorResponse(res, 500, 'MoveFileFailed', e, { requestId: req.requestId });
   }
 });
 
@@ -2052,7 +2129,7 @@ process.on('SIGTERM', () => shutdown('SIGTERM'));
 process.on('SIGINT', () => shutdown('SIGINT'));
 
 server = app.listen(PORT, () => {
-  log.info('repo-bridge started', { port: PORT, version: '0.7.0' });
+  log.info('repo-bridge started', { port: PORT, version: '0.8.0' });
 
   // Start self-diagnosis loop if configured
   if (DIAG_INTERVAL_MS > 0) {

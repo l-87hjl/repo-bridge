@@ -31,6 +31,8 @@ jest.mock('../src/github', () => ({
   getBlob: jest.fn(),
   searchRepoContent: jest.fn(),
   discoverSymbols: jest.fn(),
+  // New v0.8.0 functions
+  moveFile: jest.fn(),
 }));
 
 let app;
@@ -51,7 +53,7 @@ describe('GET /', () => {
     expect(res.status).toBe(200);
     expect(res.body.service).toBe('repo-bridge');
     expect(res.body.status).toBe('running');
-    expect(res.body.version).toBe('0.7.0');
+    expect(res.body.version).toBe('0.8.0');
     expect(res.body.endpoints).toContain('/metrics');
     expect(res.body.endpoints).toContain('/patchReplace');
     expect(res.body.endpoints).toContain('/patchDiff');
@@ -62,7 +64,10 @@ describe('GET /', () => {
     expect(res.body.endpoints).toContain('/blob');
     expect(res.body.endpoints).toContain('/search');
     expect(res.body.endpoints).toContain('/symbols');
+    expect(res.body.endpoints).toContain('/moveFile');
+    expect(res.body.endpoints).toContain('/copy');
     expect(res.body.capabilities.readLines).toBeDefined();
+    expect(res.body.capabilities.moveFile).toBeDefined();
     expect(res.body.capabilities.search).toBeDefined();
     expect(res.body.capabilities.symbols).toBeDefined();
   });
@@ -83,7 +88,7 @@ describe('GET /metrics', () => {
     const res = await request(app).get('/metrics');
     expect(res.status).toBe(200);
     expect(res.body.success).toBe(true);
-    expect(res.body.version).toBe('0.7.0');
+    expect(res.body.version).toBe('0.8.0');
     expect(res.body.memory).toBeDefined();
     expect(res.body.memory.rss).toBeGreaterThan(0);
     expect(res.body.memory.heapUsed).toBeGreaterThan(0);
@@ -306,6 +311,62 @@ describe('POST /createPR', () => {
     expect(res.body.success).toBe(true);
     expect(res.body.number).toBe(42);
     expect(res.body.url).toContain('pull/42');
+  });
+});
+
+describe('POST /moveFile', () => {
+  it('returns 400 if required fields missing', async () => {
+    const res = await request(app)
+      .post('/moveFile')
+      .send({ sourceRepo: 'owner/repo' });
+    expect(res.status).toBe(400);
+  });
+
+  it('returns 400 if destinationPath/newPath missing', async () => {
+    const res = await request(app)
+      .post('/moveFile')
+      .send({ sourceRepo: 'owner/repo', sourcePath: 'old.txt' });
+    expect(res.status).toBe(400);
+  });
+
+  it('moves a file within the same repo (rename)', async () => {
+    const github = require('../src/github');
+    github.moveFile.mockResolvedValueOnce({
+      ok: true,
+      moved: true,
+      source: { owner: 'owner', repo: 'repo', branch: 'main', path: 'old.txt', sha: 'abc' },
+      destination: { committed: true, owner: 'owner', repo: 'repo', branch: 'main', path: 'new.txt', commitSha: 'def' },
+    });
+
+    const res = await request(app)
+      .post('/moveFile')
+      .send({ sourceRepo: 'owner/repo', sourcePath: 'old.txt', newPath: 'new.txt', message: 'Rename file' });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.moved).toBe(true);
+    expect(res.body.source.path).toBe('old.txt');
+    expect(res.body.destination.path).toBe('new.txt');
+  });
+
+  it('moves a file across repos', async () => {
+    const github = require('../src/github');
+    github.moveFile.mockResolvedValueOnce({
+      ok: true,
+      moved: true,
+      source: { owner: 'org', repo: 'repo-a', branch: 'main', path: 'src/utils.js', sha: 'aaa' },
+      destination: { committed: true, owner: 'org', repo: 'repo-b', branch: 'main', path: 'lib/utils.js', commitSha: 'bbb' },
+    });
+
+    const res = await request(app)
+      .post('/moveFile')
+      .send({
+        sourceRepo: 'org/repo-a', sourcePath: 'src/utils.js',
+        destinationRepo: 'org/repo-b', destinationPath: 'lib/utils.js',
+        message: 'Move utils to repo-b',
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.ok).toBe(true);
+    expect(res.body.moved).toBe(true);
   });
 });
 
